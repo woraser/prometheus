@@ -19,3 +19,6 @@ benchmark.txt
 
 .idea/*
 .idea/vcs.xml
+
+
+vendor/*

@@ -39,6 +39,7 @@ require (
 	github.com/hashicorp/golang-lru v0.5.3 // indirect
 	github.com/hashicorp/memberlist v0.1.4 // indirect
 	github.com/hashicorp/serf v0.8.3 // indirect
+	github.com/ianlancetaylor/demangle v0.0.0-20181102032728-5e5cf60278f6 // indirect
 	github.com/influxdata/influxdb v1.7.7
 	github.com/jpillora/backoff v0.0.0-20180909062703-3050d21c67d7 // indirect
 	github.com/json-iterator/go v1.1.7

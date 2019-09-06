@@ -41,6 +41,7 @@ import (
 )
 
 var (
+	//无法加载的服务发现配置总数
 	failedConfigs = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "prometheus_sd_configs_failed_total",
@@ -48,6 +49,7 @@ var (
 		},
 		[]string{"name"},
 	)
+	//当前已发现目标的数量。
 	discoveredTargets = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "prometheus_sd_discovered_targets",
@@ -55,6 +57,7 @@ var (
 		},
 		[]string{"name", "config"},
 	)
+	//从发现的服务中收到的更新事件总数
 	receivedUpdates = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "prometheus_sd_received_updates_total",
@@ -62,6 +65,7 @@ var (
 		},
 		[]string{"name"},
 	)
+	//无法立即发送的更新事件总数。
 	delayedUpdates = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "prometheus_sd_updates_delayed_total",
@@ -69,6 +73,7 @@ var (
 		},
 		[]string{"name"},
 	)
+	//发送给SD消费者的更新事件总数
 	sentUpdates = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "prometheus_sd_updates_total",
@@ -79,6 +84,7 @@ var (
 )
 
 func init() {
+	//监控注册
 	prometheus.MustRegister(failedConfigs, discoveredTargets, receivedUpdates, delayedUpdates, sentUpdates)
 }
 
@@ -95,6 +101,8 @@ type Discoverer interface {
 	// updated target groups.
 	// Must returns if the context gets canceled. It should not close the update
 	// channel on returning.
+	//Group是一组具有通用标签集的目标。
+	//Group{Targets, Labels, Source(描述)}
 	Run(ctx context.Context, up chan<- []*targetgroup.Group)
 }
 
@@ -104,6 +112,7 @@ type poolKey struct {
 }
 
 // provider holds a Discoverer instance, its configuration and its subscribers.
+// 服务发现实例
 type provider struct {
 	name   string
 	d      Discoverer
@@ -112,6 +121,7 @@ type provider struct {
 }
 
 // NewManager is the Discovery Manager constructor.
+// 服务发现管理构造器
 func NewManager(ctx context.Context, logger log.Logger, options ...func(*Manager)) *Manager {
 	if logger == nil {
 		logger = log.NewNopLogger()
@@ -151,21 +161,26 @@ type Manager struct {
 
 	// Some Discoverers(eg. k8s) send only the updates for a given target group
 	// so we use map[tg.Source]*targetgroup.Group to know which group to update.
+	// poolKey.name = Group.Source
 	targets map[poolKey]map[string]*targetgroup.Group
-	// providers keeps track of SD providers.
+	// providers keeps track of SD providers.追踪
 	providers []*provider
 	// The sync channel sends the updates as a map where the key is the job value from the scrape config.
+	// 同步通道将更新作为映射发送，其中键是来自scrape配置的作业值。
 	syncCh chan map[string][]*targetgroup.Group
 
 	// How long to wait before sending updates to the channel. The variable
 	// should only be modified in unit tests.
+	// 修改的更新等待事件
 	updatert time.Duration
 
 	// The triggerSend channel signals to the manager that new updates have been received from providers.
+	// 服务发现跟新时触发通知
 	triggerSend chan struct{}
 }
 
 // Run starts the background processing
+// 启动后台运行服务,在/cmd/prometheus main.go文件中调用
 func (m *Manager) Run() error {
 	go m.sender()
 	for range m.ctx.Done() {
@@ -176,11 +191,13 @@ func (m *Manager) Run() error {
 }
 
 // SyncCh returns a read only channel used by all the clients to receive target updates.
+// 返回一个所有目标接受更新的通道
 func (m *Manager) SyncCh() <-chan map[string][]*targetgroup.Group {
 	return m.syncCh
 }
 
 // ApplyConfig removes all running discovery providers and starts new ones using the provided config.
+// 重置SD
 func (m *Manager) ApplyConfig(cfg map[string]sd_config.ServiceDiscoveryConfig) error {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
@@ -317,6 +334,7 @@ func (m *Manager) allGroups() map[string][]*targetgroup.Group {
 	return tSets
 }
 
+// 注册不同的服务发现组件 etcd，consule等
 func (m *Manager) registerProviders(cfg sd_config.ServiceDiscoveryConfig, setName string) {
 	var added bool
 	add := func(cfg interface{}, newDiscoverer func() (Discoverer, error)) {

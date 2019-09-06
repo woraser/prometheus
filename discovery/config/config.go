@@ -31,6 +31,7 @@ import (
 )
 
 // ServiceDiscoveryConfig configures lists of different service discovery mechanisms.
+// 支持的服务发现机制
 type ServiceDiscoveryConfig struct {
 	// List of labeled target groups for this job.
 	StaticConfigs []*targetgroup.Group `yaml:"static_configs,omitempty"`
@@ -61,6 +62,7 @@ type ServiceDiscoveryConfig struct {
 }
 
 // Validate validates the ServiceDiscoveryConfig.
+// 配置校验
 func (c *ServiceDiscoveryConfig) Validate() error {
 	for _, cfg := range c.AzureSDConfigs {
 		if cfg == nil {

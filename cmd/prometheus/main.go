@@ -71,14 +71,15 @@ var (
 		Name: "prometheus_config_last_reload_success_timestamp_seconds",
 		Help: "Timestamp of the last successful configuration reload.",
 	})
-
+	//默认的数据的持久化时间 15d
 	defaultRetentionString   = "15d"
 	defaultRetentionDuration model.Duration
 )
 
 func init() {
+	//prometheus注册采集器
 	prometheus.MustRegister(version.NewCollector("prometheus"))
-
+	//申明数据保留时间，比如有效，否则奔溃
 	var err error
 	defaultRetentionDuration, err = model.ParseDuration(defaultRetentionString)
 	if err != nil {
@@ -87,33 +88,34 @@ func init() {
 }
 
 func main() {
+	//是否是debug模式
 	if os.Getenv("DEBUG") != "" {
 		runtime.SetBlockProfileRate(20)
 		runtime.SetMutexProfileFraction(20)
 	}
-
+	//新旧数据保留时间
 	var (
 		oldFlagRetentionDuration model.Duration
 		newFlagRetentionDuration model.Duration
 	)
-
+	//config模型类
 	cfg := struct {
 		configFile string
 
-		localStoragePath    string
-		notifier            notifier.Options
-		notifierTimeout     model.Duration
+		localStoragePath    string //存储地址
+		notifier            notifier.Options //通知配置
+		notifierTimeout     model.Duration //通知超时时间
 		forGracePeriod      model.Duration
 		outageTolerance     model.Duration
 		resendDelay         model.Duration
-		web                 web.Options
-		tsdb                tsdb.Options
-		lookbackDelta       model.Duration
+		web                 web.Options //web配置
+		tsdb                tsdb.Options //tsdb数据库配置
+		lookbackDelta       model.Duration //允许在表达式评估期间检索度量标准的差异。
 		webTimeout          model.Duration
 		queryTimeout        model.Duration
 		queryConcurrency    int
 		queryMaxSamples     int
-		RemoteFlushDeadline model.Duration
+		RemoteFlushDeadline model.Duration //原创刷新
 
 		prometheusURL   string
 		corsRegexString string
@@ -129,7 +131,7 @@ func main() {
 		},
 		promlogConfig: promlog.Config{},
 	}
-
+	//CLI工具类 构建CLI
 	a := kingpin.New(filepath.Base(os.Args[0]), "The Prometheus monitoring server")
 
 	a.Version(version.Print("prometheus"))
@@ -257,9 +259,9 @@ func main() {
 		a.Usage(os.Args[1:])
 		os.Exit(2)
 	}
-
+	//日志工具初始化
 	logger := promlog.New(&cfg.promlogConfig)
-
+	//web模块 初始化
 	cfg.web.ExternalURL, err = computeExternalURL(cfg.prometheusURL, cfg.web.ListenAddress)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, errors.Wrapf(err, "parse external URL %q", cfg.prometheusURL))
@@ -280,7 +282,8 @@ func main() {
 	// RoutePrefix must always be at least '/'.
 	cfg.web.RoutePrefix = "/" + strings.Trim(cfg.web.RoutePrefix, "/")
 
-	{ // Time retention settings.
+	//tsdb 设置
+	{ // Time retention settings. 持久化的时间设置
 		if oldFlagRetentionDuration != 0 {
 			level.Warn(logger).Log("deprecation_notice", "'storage.tsdb.retention' flag is deprecated use 'storage.tsdb.retention.time' instead.")
 			cfg.tsdb.RetentionDuration = oldFlagRetentionDuration
@@ -307,7 +310,7 @@ func main() {
 		}
 	}
 
-	{ // Max block size  settings.
+	{ // Max block size  settings. 持久化的存储快大小设置
 		if cfg.tsdb.MaxBlockDuration == 0 {
 			maxBlockDuration, err := model.ParseDuration("31d")
 			if err != nil {
@@ -321,33 +324,41 @@ func main() {
 			cfg.tsdb.MaxBlockDuration = maxBlockDuration
 		}
 	}
-
+	//promql 设置
 	promql.LookbackDelta = time.Duration(cfg.lookbackDelta)
 	promql.SetDefaultEvaluationInterval(time.Duration(config.DefaultGlobalConfig.EvaluationInterval))
-
+	//日志 设置
 	// Above level 6, the k8s client would log bearer tokens in clear-text.
+	// 在6级以上，k8s客户端将以明文形式记录承载令牌
 	klog.ClampLevel(6)
 	klog.SetLogger(log.With(logger, "component", "k8s_client_runtime"))
 
 	level.Info(logger).Log("msg", "Starting Prometheus", "version", version.Info())
 	level.Info(logger).Log("build_context", version.BuildContext())
+	//运行平台名称
 	level.Info(logger).Log("host_details", prom_runtime.Uname())
+	//打开文件限制 服务器设置
 	level.Info(logger).Log("fd_limits", prom_runtime.FdLimits())
+	//虚拟内存设置
 	level.Info(logger).Log("vm_limits", prom_runtime.VmLimits())
 
 	var (
+		//本地存储
 		localStorage  = &tsdb.ReadyStorage{}
+		//远程存储
 		remoteStorage = remote.NewStorage(log.With(logger, "component", "remote"), prometheus.DefaultRegisterer, localStorage.StartTime, cfg.localStoragePath, time.Duration(cfg.RemoteFlushDeadline))
+		//存储抽象
 		fanoutStorage = storage.NewFanout(logger, localStorage, remoteStorage)
 	)
 
 	var (
 		ctxWeb, cancelWeb = context.WithCancel(context.Background())
 		ctxRule           = context.Background()
-
+		//通知
 		notifierManager = notifier.NewManager(&cfg.notifier, log.With(logger, "component", "notifier"))
 
 		ctxScrape, cancelScrape = context.WithCancel(context.Background())
+
 		discoveryManagerScrape  = discovery.NewManager(ctxScrape, log.With(logger, "component", "discovery manager scrape"), discovery.Name("scrape"))
 
 		ctxNotify, cancelNotify = context.WithCancel(context.Background())
@@ -363,7 +374,7 @@ func main() {
 			Timeout:            time.Duration(cfg.queryTimeout),
 			ActiveQueryTracker: promql.NewActiveQueryTracker(cfg.localStoragePath, cfg.queryConcurrency, log.With(logger, "component", "activeQueryTracker")),
 		}
-
+		//promql 查询引擎
 		queryEngine = promql.NewEngine(opts)
 
 		ruleManager = rules.NewManager(&rules.ManagerOptions{
@@ -380,7 +391,7 @@ func main() {
 			ResendDelay:     time.Duration(cfg.resendDelay),
 		})
 	)
-
+	//cfg web 设置
 	cfg.web.Context = ctxWeb
 	cfg.web.TSDB = localStorage.Get
 	cfg.web.Storage = fanoutStorage
@@ -463,7 +474,7 @@ func main() {
 			)
 		},
 	}
-
+	//注册collector
 	prometheus.MustRegister(configSuccess)
 	prometheus.MustRegister(configSuccessTime)
 
@@ -486,10 +497,11 @@ func main() {
 			close(reloadReady.C)
 		})
 	}
-
+	// 函数组 多函数并行运行 其中一个函数返回，所有函数都会中断
 	var g run.Group
+	// 为 group 添加函数
 	{
-		// Termination handler.
+		// Termination handler. 终止事件
 		term := make(chan os.Signal, 1)
 		signal.Notify(term, os.Interrupt, syscall.SIGTERM)
 		cancel := make(chan struct{})
@@ -515,7 +527,7 @@ func main() {
 		)
 	}
 	{
-		// Scrape discovery manager.
+		// Scrape discovery manager.搜集服务管理
 		g.Add(
 			func() error {
 				err := discoveryManagerScrape.Run()
@@ -529,7 +541,7 @@ func main() {
 		)
 	}
 	{
-		// Notify discovery manager.
+		// Notify discovery manager.统计服务管理
 		g.Add(
 			func() error {
 				err := discoveryManagerNotify.Run()
@@ -543,7 +555,7 @@ func main() {
 		)
 	}
 	{
-		// Scrape manager.
+		// Scrape manager.搜集管理
 		g.Add(
 			func() error {
 				// When the scrape manager receives a new targets list
@@ -565,7 +577,7 @@ func main() {
 		)
 	}
 	{
-		// Reload handler.
+		// Reload handler.重启事件
 
 		// Make sure that sighup handler is registered with a redirect to the channel before the potentially
 		// long and synchronous tsdb init.
@@ -603,7 +615,7 @@ func main() {
 		)
 	}
 	{
-		// Initial configuration loading.
+		// Initial configuration loading.初始化配置
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
@@ -732,6 +744,7 @@ func main() {
 			},
 		)
 	}
+	//group 函数组启动
 	if err := g.Run(); err != nil {
 		level.Error(logger).Log("err", err)
 		os.Exit(1)
