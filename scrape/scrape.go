@@ -135,6 +135,7 @@ var (
 )
 
 func init() {
+	// 注册一些采集监控项
 	prometheus.MustRegister(targetIntervalLength)
 	prometheus.MustRegister(targetReloadIntervalLength)
 	prometheus.MustRegister(targetScrapePools)
@@ -151,6 +152,7 @@ func init() {
 }
 
 // scrapePool manages scrapes for sets of targets.
+// 数据采集池
 type scrapePool struct {
 	appendable Appendable
 	logger     log.Logger

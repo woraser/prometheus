@@ -35,30 +35,32 @@ import (
 )
 
 // TargetHealth describes the health state of a target.
+// 目标健康状态 HealthUnknown | HealthGood | HealthBad
 type TargetHealth string
 
 // The possible health states of a target based on the last performed scrape.
 const (
-	HealthUnknown TargetHealth = "unknown"
-	HealthGood    TargetHealth = "up"
-	HealthBad     TargetHealth = "down"
+	HealthUnknown TargetHealth = "unknown" // 未知
+	HealthGood    TargetHealth = "up"	// 运行
+	HealthBad     TargetHealth = "down"	//down机
 )
 
 // Target refers to a singular HTTP or HTTPS endpoint.
+// Target指的是单个HTTP或HTTPS端点。
 type Target struct {
 	// Labels before any processing.
-	discoveredLabels labels.Labels
+	discoveredLabels labels.Labels	//初始标签
 	// Any labels that are added to this target and its metrics.
-	labels labels.Labels
+	labels labels.Labels	//自定义标签
 	// Additional URL parameters that are part of the target URL.
-	params url.Values
+	params url.Values	//url参数
 
 	mtx                sync.RWMutex
 	lastError          error
-	lastScrape         time.Time
-	lastScrapeDuration time.Duration
+	lastScrape         time.Time	//上一次采集时间
+	lastScrapeDuration time.Duration	//上一次采集的持续时间
 	health             TargetHealth
-	metadata           metricMetadataStore
+	metadata           metricMetadataStore	//元数据
 }
 
 // NewTarget creates a reasonably configured target for querying.
@@ -116,6 +118,7 @@ func (t *Target) setMetadataStore(s metricMetadataStore) {
 }
 
 // hash returns an identifying hash for the target.
+// 采集目标的hash值 作为唯一标识符用
 func (t *Target) hash() uint64 {
 	h := fnv.New64a()
 	//nolint: errcheck
@@ -145,6 +148,7 @@ func (t *Target) offset(interval time.Duration, jitterSeed uint64) time.Duration
 }
 
 // Labels returns a copy of the set of all public labels of the target.
+// 获得所有的labels
 func (t *Target) Labels() labels.Labels {
 	lset := make(labels.Labels, 0, len(t.labels))
 	for _, l := range t.labels {
@@ -156,6 +160,7 @@ func (t *Target) Labels() labels.Labels {
 }
 
 // DiscoveredLabels returns a copy of the target's labels before any processing.
+// 获得所有的初始化labels
 func (t *Target) DiscoveredLabels() labels.Labels {
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
@@ -165,6 +170,7 @@ func (t *Target) DiscoveredLabels() labels.Labels {
 }
 
 // SetDiscoveredLabels sets new DiscoveredLabels
+// 设置初始化labels
 func (t *Target) SetDiscoveredLabels(l labels.Labels) {
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
@@ -172,6 +178,7 @@ func (t *Target) SetDiscoveredLabels(l labels.Labels) {
 }
 
 // URL returns a copy of the target's URL.
+// 获取目标url
 func (t *Target) URL() *url.URL {
 	params := url.Values{}
 
@@ -200,6 +207,7 @@ func (t *Target) URL() *url.URL {
 	}
 }
 
+// 状态报告
 func (t *Target) report(start time.Time, dur time.Duration, err error) {
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
@@ -216,6 +224,7 @@ func (t *Target) report(start time.Time, dur time.Duration, err error) {
 }
 
 // LastError returns the error encountered during the last scrape.
+// 获取上次采集中的错误
 func (t *Target) LastError() error {
 	t.mtx.RLock()
 	defer t.mtx.RUnlock()
@@ -224,6 +233,7 @@ func (t *Target) LastError() error {
 }
 
 // LastScrape returns the time of the last scrape.
+// 获取上次采集时间
 func (t *Target) LastScrape() time.Time {
 	t.mtx.RLock()
 	defer t.mtx.RUnlock()
@@ -232,6 +242,7 @@ func (t *Target) LastScrape() time.Time {
 }
 
 // LastScrapeDuration returns how long the last scrape of the target took.
+// 获取上次的采集持续时间
 func (t *Target) LastScrapeDuration() time.Duration {
 	t.mtx.RLock()
 	defer t.mtx.RUnlock()
@@ -240,6 +251,7 @@ func (t *Target) LastScrapeDuration() time.Duration {
 }
 
 // Health returns the last known health state of the target.
+// 获取健康状态
 func (t *Target) Health() TargetHealth {
 	t.mtx.RLock()
 	defer t.mtx.RUnlock()
@@ -248,6 +260,7 @@ func (t *Target) Health() TargetHealth {
 }
 
 // Targets is a sortable list of targets.
+// 可排序的目标集合
 type Targets []*Target
 
 func (ts Targets) Len() int           { return len(ts) }
@@ -257,6 +270,7 @@ func (ts Targets) Swap(i, j int)      { ts[i], ts[j] = ts[j], ts[i] }
 var errSampleLimit = errors.New("sample limit exceeded")
 
 // limitAppender limits the number of total appended samples in a batch.
+// 追加器的限制
 type limitAppender struct {
 	storage.Appender
 
@@ -264,6 +278,7 @@ type limitAppender struct {
 	i     int
 }
 
+// 追加起添加label数据
 func (app *limitAppender) Add(lset labels.Labels, t int64, v float64) (uint64, error) {
 	if !value.IsStaleNaN(v) {
 		app.i++
@@ -289,6 +304,7 @@ func (app *limitAppender) AddFast(lset labels.Labels, ref uint64, t int64, v flo
 	return err
 }
 
+// 时间appender
 type timeLimitAppender struct {
 	storage.Appender
 
@@ -318,6 +334,7 @@ func (app *timeLimitAppender) AddFast(lset labels.Labels, ref uint64, t int64, v
 // populateLabels builds a label set from the given label set and scrape configuration.
 // It returns a label set before relabeling was applied as the second return value.
 // Returns the original discovered label set found before relabelling was applied if the target is dropped during relabeling.
+// 根据配置文件填充lables
 func populateLabels(lset labels.Labels, cfg *config.ScrapeConfig) (res, orig labels.Labels, err error) {
 	// Copy labels into the labelset for the target if they are not set already.
 	scrapeLabels := []labels.Label{
@@ -407,6 +424,7 @@ func populateLabels(lset labels.Labels, cfg *config.ScrapeConfig) (res, orig lab
 }
 
 // targetsFromGroup builds targets based on the given TargetGroup and config.
+// 从config和group中构建目标组
 func targetsFromGroup(tg *targetgroup.Group, cfg *config.ScrapeConfig) ([]*Target, error) {
 	targets := make([]*Target, 0, len(tg.Targets))
 

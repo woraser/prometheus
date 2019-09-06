@@ -179,6 +179,7 @@ type Manager struct {
 	triggerSend chan struct{}
 }
 
+// module 入口函数
 // Run starts the background processing
 // 启动后台运行服务,在/cmd/prometheus main.go文件中调用
 func (m *Manager) Run() error {
@@ -442,6 +443,7 @@ func (m *Manager) registerProviders(cfg sd_config.ServiceDiscoveryConfig, setNam
 }
 
 // StaticProvider holds a list of target groups that never change.
+// 未发送改变的目标组
 type StaticProvider struct {
 	TargetGroups []*targetgroup.Group
 }

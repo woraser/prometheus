@@ -71,14 +71,19 @@ type Manager struct {
 
 // Run receives and saves target set updates and triggers the scraping loops reloading.
 // Reloading happens in the background so that it doesn't block receiving targets updates.
+// 主函数 外部调用入口
 func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
+	// 重载配置
 	go m.reloader()
 	for {
 		select {
+		// channel中有新的采集目标，就执行采集任务
 		case ts := <-tsets:
+			// 更新manager中的目标组
 			m.updateTsets(ts)
 
 			select {
+			// 触发reload事件
 			case m.triggerReload <- struct{}{}:
 			default:
 			}
@@ -95,11 +100,13 @@ func (m *Manager) reloader() {
 
 	for {
 		select {
+		// 监听到关闭信号就结束for
 		case <-m.graceShut:
 			return
 		case <-ticker.C:
 			select {
 			case <-m.triggerReload:
+				// run中没采集一次数据，就要求执行一次reload
 				m.reload()
 			case <-m.graceShut:
 				return
@@ -111,7 +118,11 @@ func (m *Manager) reloader() {
 func (m *Manager) reload() {
 	m.mtxScrape.Lock()
 	var wg sync.WaitGroup
+	// 遍历采集目标执行采集事件
+	// 为每一个目标组 提供一个协程进行采集处理
+	// TODO 在不明确目标组数量的场景下 添加一个协程池 可能会好一点
 	for setName, groups := range m.targetSets {
+		// 构造采集pool
 		if _, ok := m.scrapePools[setName]; !ok {
 			scrapeConfig, ok := m.scrapeConfigs[setName]
 			if !ok {
@@ -128,6 +139,7 @@ func (m *Manager) reload() {
 
 		wg.Add(1)
 		// Run the sync in parallel as these take a while and at high load can't catch up.
+		// 同步执行pool中的采集任务
 		go func(sp *scrapePool, groups []*targetgroup.Group) {
 			sp.Sync(groups)
 			wg.Done()

@@ -46,6 +46,7 @@ import (
 	"github.com/prometheus/prometheus/pkg/relabel"
 )
 
+// 数据类型
 const (
 	contentTypeJSON = "application/json"
 )
@@ -60,6 +61,7 @@ const (
 var userAgent = fmt.Sprintf("Prometheus/%s", version.Version)
 
 // Alert is a generic representation of an alert in the Prometheus eco-system.
+// 警报是普罗米修斯生态系统中警报的一般表示。
 type Alert struct {
 	// Label value pairs for purpose of aggregation, matching, and disposition
 	// dispatching. This must minimally include an "alertname" label.
@@ -75,15 +77,18 @@ type Alert struct {
 }
 
 // Name returns the name of the alert. It is equivalent to the "alertname" label.
+// 告警名称
 func (a *Alert) Name() string {
 	return a.Labels.Get(labels.AlertName)
 }
 
 // Hash returns a hash over the alert. It is equivalent to the alert labels hash.
+// 告警hash
 func (a *Alert) Hash() uint64 {
 	return a.Labels.Hash()
 }
 
+// Alerts toString()
 func (a *Alert) String() string {
 	s := fmt.Sprintf("%s[%s]", a.Name(), fmt.Sprintf("%016x", a.Hash())[:7])
 	if a.Resolved() {
@@ -108,11 +113,12 @@ func (a *Alert) ResolvedAt(ts time.Time) bool {
 
 // Manager is responsible for dispatching alert notifications to an
 // alert manager service.
+// Manager负责向告警服务分发告警通知
 type Manager struct {
-	queue []*Alert
+	queue []*Alert // 告警队列
 	opts  *Options
 
-	metrics *alertMetrics
+	metrics *alertMetrics // 告警指标
 
 	more   chan struct{}
 	mtx    sync.RWMutex
@@ -125,7 +131,7 @@ type Manager struct {
 
 // Options are the configurable parameters of a Handler.
 type Options struct {
-	QueueCapacity  int
+	QueueCapacity  int // 队列容量
 	ExternalLabels labels.Labels
 	RelabelConfigs []*relabel.Config
 	// Used for sending HTTP requests to the Alertmanager.
@@ -144,6 +150,7 @@ type alertMetrics struct {
 	alertmanagersDiscovered prometheus.GaugeFunc
 }
 
+// 构架告警metric
 func newAlertMetrics(r prometheus.Registerer, queueCap int, queueLen, alertmanagersDiscovered func() float64) *alertMetrics {
 	m := &alertMetrics{
 		latency: prometheus.NewSummaryVec(prometheus.SummaryOpts{
@@ -220,6 +227,7 @@ func do(ctx context.Context, client *http.Client, req *http.Request) (*http.Resp
 }
 
 // NewManager is the manager constructor.
+// manager 构造器
 func NewManager(o *Options, logger log.Logger) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -253,6 +261,7 @@ func NewManager(o *Options, logger log.Logger) *Manager {
 }
 
 // ApplyConfig updates the status state as the new config requires.
+// 根据配置更新manager
 func (n *Manager) ApplyConfig(conf *config.Config) error {
 	n.mtx.Lock()
 	defer n.mtx.Unlock()
@@ -310,6 +319,7 @@ func (n *Manager) nextBatch() []*Alert {
 }
 
 // Run dispatches notifications continuously.
+// 持续运行分发器
 func (n *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) {
 
 	for {
@@ -456,6 +466,7 @@ func (n *Manager) DroppedAlertmanagers() []*url.URL {
 
 // sendAll sends the alerts to all configured Alertmanagers concurrently.
 // It returns true if the alerts could be sent successfully to at least one Alertmanager.
+// 批量发送告警 只要有一个告警发送成功，就代表发送成功
 func (n *Manager) sendAll(alerts ...*Alert) bool {
 	begin := time.Now()
 
@@ -573,6 +584,7 @@ func labelsToOpenAPILabelSet(modelLabelSet labels.Labels) models.LabelSet {
 	return apiLabelSet
 }
 
+// 单个发送告警
 func (n *Manager) sendOne(ctx context.Context, c *http.Client, url string, b []byte) error {
 	req, err := http.NewRequest("POST", url, bytes.NewReader(b))
 	if err != nil {
@@ -604,6 +616,7 @@ func (n *Manager) Stop() {
 }
 
 // alertmanager holds Alertmanager endpoint information.
+// Alertmanager 端点信息
 type alertmanager interface {
 	url() *url.URL
 }
@@ -649,6 +662,7 @@ func newAlertmanagerSet(cfg *config.AlertmanagerConfig, logger log.Logger) (*ale
 
 // sync extracts a deduplicated set of Alertmanager endpoints from a list
 // of target groups definitions.
+// sync从目标组定义列表中提取重复数据删除的Alertmanager端点集。
 func (s *alertmanagerSet) sync(tgs []*targetgroup.Group) {
 	allAms := []alertmanager{}
 	allDroppedAms := []alertmanager{}
@@ -693,6 +707,7 @@ func postPath(pre string, v config.AlertmanagerAPIVersion) string {
 
 // alertmanagerFromGroup extracts a list of alertmanagers from a target group
 // and an associated AlertmanagerConfig.
+// alertmanagerFromGroup从目标组和相关的AlertmanagerConfig中提取警报管理器列表。
 func alertmanagerFromGroup(tg *targetgroup.Group, cfg *config.AlertmanagerConfig) ([]alertmanager, []alertmanager, error) {
 	var res []alertmanager
 	var droppedAlertManagers []alertmanager

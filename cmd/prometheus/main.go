@@ -541,7 +541,7 @@ func main() {
 		)
 	}
 	{
-		// Notify discovery manager.统计服务管理
+		// Notify discovery manager.通知服务管理
 		g.Add(
 			func() error {
 				err := discoveryManagerNotify.Run()
@@ -555,7 +555,7 @@ func main() {
 		)
 	}
 	{
-		// Scrape manager.搜集管理
+		// Scrape manager.数据搜集管理
 		g.Add(
 			func() error {
 				// When the scrape manager receives a new targets list
