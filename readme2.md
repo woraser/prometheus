@@ -19,6 +19,7 @@
 - documents
 
 - notifer
+    告警通知服务
 
 - pkg
 
@@ -28,7 +29,27 @@
 
 - rules
 
+    告警规则
+
 - scrape
+
+    数据采集
+    
+- scripts
+
+
+- storage
+
+- template
+
+- tsdb
+
+- util
+
+
+- vendor 
+
+- web     
 
 
    

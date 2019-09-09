@@ -270,7 +270,7 @@ func (ts Targets) Swap(i, j int)      { ts[i], ts[j] = ts[j], ts[i] }
 var errSampleLimit = errors.New("sample limit exceeded")
 
 // limitAppender limits the number of total appended samples in a batch.
-// 追加器的限制
+// 数量限制
 type limitAppender struct {
 	storage.Appender
 
@@ -304,7 +304,7 @@ func (app *limitAppender) AddFast(lset labels.Labels, ref uint64, t int64, v flo
 	return err
 }
 
-// 时间appender
+// appender数据的时间限制
 type timeLimitAppender struct {
 	storage.Appender
 
@@ -342,9 +342,11 @@ func populateLabels(lset labels.Labels, cfg *config.ScrapeConfig) (res, orig lab
 		{Name: model.MetricsPathLabel, Value: cfg.MetricsPath},
 		{Name: model.SchemeLabel, Value: cfg.Scheme},
 	}
+	// 合并元数据label和自定义label
 	lb := labels.NewBuilder(lset)
 
 	for _, l := range scrapeLabels {
+		// 保证唯一性
 		if lv := lset.Get(l.Name); lv == "" {
 			lb.Set(l.Name, l.Value)
 		}
@@ -355,14 +357,18 @@ func populateLabels(lset labels.Labels, cfg *config.ScrapeConfig) (res, orig lab
 			lb.Set(model.ParamLabelPrefix+k, v[0])
 		}
 	}
-
+	// 提取等待relabeling的labels
 	preRelabelLabels := lb.Labels()
+	// 根据配置文件进行relabel操作（对label进行一些基础操作，drop,keep,replace）
+	// https://yunlzheng.gitbook.io/prometheus-book/part-ii-prometheus-jin-jie/sd/service-discovery-with-relabel
 	lset = relabel.Process(preRelabelLabels, cfg.RelabelConfigs...)
 
 	// Check if the target was dropped.
+	// 如果target已被抛弃，直接返回未处理labels
 	if lset == nil {
 		return nil, preRelabelLabels, nil
 	}
+	// 如果没有AddressLabel，直接抛错
 	if v := lset.Get(model.AddressLabel); v == "" {
 		return nil, nil, errors.New("no address")
 	}
@@ -402,6 +408,7 @@ func populateLabels(lset labels.Labels, cfg *config.ScrapeConfig) (res, orig lab
 
 	// Meta labels are deleted after relabelling. Other internal labels propagate to
 	// the target which decides whether they will be part of their label set.
+	// 删除元数据_meta_xxx
 	for _, l := range lset {
 		if strings.HasPrefix(l.Name, model.MetaLabelPrefix) {
 			lb.Del(l.Name)
@@ -409,11 +416,13 @@ func populateLabels(lset labels.Labels, cfg *config.ScrapeConfig) (res, orig lab
 	}
 
 	// Default the instance label to the target address.
+	// 追加实例label
 	if v := lset.Get(model.InstanceLabel); v == "" {
 		lb.Set(model.InstanceLabel, addr)
 	}
 
 	res = lb.Labels()
+	// label校验（string is a valid UTF8？）
 	for _, l := range res {
 		// Check label values are valid, drop the target if not.
 		if !model.LabelValue(l.Value).IsValid() {
@@ -425,12 +434,15 @@ func populateLabels(lset labels.Labels, cfg *config.ScrapeConfig) (res, orig lab
 
 // targetsFromGroup builds targets based on the given TargetGroup and config.
 // 从config和group中构建目标组
+// 从discovery中获取targetgroup
 func targetsFromGroup(tg *targetgroup.Group, cfg *config.ScrapeConfig) ([]*Target, error) {
+	// targets数组
 	targets := make([]*Target, 0, len(tg.Targets))
 
 	for i, tlset := range tg.Targets {
+		// 当前target的labels数组
 		lbls := make([]labels.Label, 0, len(tlset)+len(tg.Labels))
-
+		// 合并labels
 		for ln, lv := range tlset {
 			lbls = append(lbls, labels.Label{Name: string(ln), Value: string(lv)})
 		}
@@ -439,7 +451,7 @@ func targetsFromGroup(tg *targetgroup.Group, cfg *config.ScrapeConfig) ([]*Targe
 				lbls = append(lbls, labels.Label{Name: string(ln), Value: string(lv)})
 			}
 		}
-
+		// 构建label，lbls中的label必须唯一
 		lset := labels.New(lbls...)
 
 		lbls, origLabels, err := populateLabels(lset, cfg)
