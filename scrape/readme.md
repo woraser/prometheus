@@ -1,5 +1,9 @@
 ### 数据采集
 
+
+#### Manage
+
+
 #### Target
 
 #### Description
@@ -35,4 +39,35 @@
     最后一次采集是抛出的错误，没有则为nil
     
 
-### 
+### Scrape
+
+#### Description
+    为每一个target创建scrapepool，通过get请求采集数据，延迟写入appender中。
+    reload方法会更新target。当targetgtoup发生变化时，manager.go中触发sync()方法。
+    
+
+#### Keys
+
+1. scrapePool
+
+    数据采集管理器
+
+2. maxAheadTime
+
+    集合的的数据管理器appender的最大生存时间，默认是10分钟
+
+3. loop
+
+    启动关闭开关
+    
+4. scrapeCache
+
+    scrape缓存    
+    
+5. met
+
+    metric缩写
+    
+
+
+
