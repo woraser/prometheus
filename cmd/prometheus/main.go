@@ -555,7 +555,7 @@ func main() {
 		)
 	}
 	{
-		// Scrape manager.数据搜集管理
+		// Scrape manager.数据抓取管理
 		g.Add(
 			func() error {
 				// When the scrape manager receives a new targets list
@@ -586,6 +586,7 @@ func main() {
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
+				// reload准备完成之后执行下面逻辑
 				<-reloadReady.C
 
 				for {
@@ -633,7 +634,7 @@ func main() {
 				}
 
 				reloadReady.Close()
-
+				// web服务就绪
 				webHandler.Ready()
 				level.Info(logger).Log("msg", "Server is ready to receive web requests.")
 				<-cancel
@@ -645,12 +646,13 @@ func main() {
 		)
 	}
 	{
-		// Rule manager.
+		// Rule manager.告警规则管理
 		// TODO(krasi) refactor ruleManager.Run() to be blocking to avoid using an extra blocking channel.
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
 				<-reloadReady.C
+				// 启动告警规则模块
 				ruleManager.Run()
 				<-cancel
 				return nil
@@ -709,7 +711,7 @@ func main() {
 		)
 	}
 	{
-		// Web handler.
+		// Web handler. 运行web模块
 		g.Add(
 			func() error {
 				if err := webHandler.Run(ctxWeb); err != nil {
@@ -763,13 +765,14 @@ func reloadConfig(filename string, logger log.Logger, rls ...func(*config.Config
 			configSuccess.Set(0)
 		}
 	}()
-
+	// 加载配置文件
 	conf, err := config.LoadFile(filename)
 	if err != nil {
 		return errors.Wrapf(err, "couldn't load configuration (--config.file=%q)", filename)
 	}
 
 	failed := false
+	// 配置文件和要求配置项 进行对比
 	for _, rl := range rls {
 		if err := rl(conf); err != nil {
 			level.Error(logger).Log("msg", "Failed to apply configuration", "err", err)

@@ -67,13 +67,14 @@ import (
 	api_v2 "github.com/prometheus/prometheus/web/api/v2"
 	"github.com/prometheus/prometheus/web/ui"
 )
-
+// 本地host地址
 var localhostRepresentations = []string{"127.0.0.1", "localhost"}
 
 // withStackTrace logs the stack trace in case the request panics. The function
 // will re-raise the error which will then be handled by the net/http package.
 // It is needed because the go-kit log package doesn't manage properly the
 // panics from net/http (see https://github.com/go-kit/kit/issues/233).
+// 开启web服务
 func withStackTracer(h http.Handler, l log.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -85,6 +86,7 @@ func withStackTracer(h http.Handler, l log.Logger) http.Handler {
 				panic(err)
 			}
 		}()
+		// 启动http服务
 		h.ServeHTTP(w, r)
 	})
 }
@@ -95,6 +97,7 @@ type metrics struct {
 	responseSize    *prometheus.HistogramVec
 }
 
+// 注册web相关的指标(请求数量 | 请求时间 | 响应大小)
 func newMetrics(r prometheus.Registerer) *metrics {
 	m := &metrics{
 		requestCounter: prometheus.NewCounterVec(
@@ -127,7 +130,7 @@ func newMetrics(r prometheus.Registerer) *metrics {
 	}
 	return m
 }
-
+// 前缀处理
 func (m *metrics) instrumentHandlerWithPrefix(prefix string) func(handlerName string, handler http.HandlerFunc) http.HandlerFunc {
 	return func(handlerName string, handler http.HandlerFunc) http.HandlerFunc {
 		return m.instrumentHandler(prefix+handlerName, handler)
@@ -148,6 +151,7 @@ func (m *metrics) instrumentHandler(handlerName string, handler http.HandlerFunc
 }
 
 // Handler serves various HTTP endpoints of the Prometheus server
+// http端点服务
 type Handler struct {
 	logger log.Logger
 
@@ -275,7 +279,7 @@ func New(logger log.Logger, o *Options) *Handler {
 
 		ready: 0,
 	}
-
+	// 暴露api_v1接口
 	h.apiV1 = api_v1.NewAPI(h.queryEngine, h.storage, h.scrapeManager, h.notifier,
 		func() config.Config {
 			h.mtx.RLock()
@@ -305,7 +309,7 @@ func New(logger log.Logger, o *Options) *Handler {
 	}
 
 	readyf := h.testReady
-
+	// 注册http路由
 	router.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, path.Join(o.ExternalURL.Path, "/graph"), http.StatusFound)
 	})
@@ -446,43 +450,55 @@ func (h *Handler) Reload() <-chan chan error {
 }
 
 // Run serves the HTTP endpoints.
+// 主函数 启动http服务
 func (h *Handler) Run(ctx context.Context) error {
 	level.Info(h.logger).Log("msg", "Start listening for connections", "address", h.options.ListenAddress)
-
+	// 监听地址，从配置中获取
 	listener, err := net.Listen("tcp", h.options.ListenAddress)
 	if err != nil {
 		return err
 	}
+	// 设置最大连接数
 	listener = netutil.LimitListener(listener, h.options.MaxConnections)
 
 	// Monitor incoming connections with conntrack.
+	// 监听并且追踪连接
+	// conntrack 连接监听库
 	listener = conntrack.NewListener(listener,
 		conntrack.TrackWithName("http"),
 		conntrack.TrackWithTracing())
 
 	var (
+		// github.com/cockroachdb/cmux库用于对于同一个连接上的不同协议的分离
+		// 在这同时启动grpc和http处理器，和grpc服务器
+		// 构建一个新的connection监听器
 		m = cmux.New(listener)
 		// See https://github.com/grpc/grpc-go/issues/2636 for why we need to use MatchWithWriters().
+		//grpc listener
 		grpcl   = m.MatchWithWriters(cmux.HTTP2MatchHeaderFieldSendSettings("content-type", "application/grpc"))
+		//http listener
 		httpl   = m.Match(cmux.HTTP1Fast())
 		grpcSrv = grpc.NewServer()
 	)
+	// 注册api_v2接口
 	av2 := api_v2.New(
 		h.options.TSDB,
 		h.options.EnableAdminAPI,
 	)
+	// 注册grpc服务端
 	av2.RegisterGRPC(grpcSrv)
-
+	// av2的http处理
 	hh, err := av2.HTTPHandler(ctx, h.options.ListenAddress)
 	if err != nil {
 		return err
 	}
-
+	// 校验是否准备就绪
 	hhFunc := h.testReadyHandler(hh)
 
 	operationName := nethttp.OperationNameFunc(func(r *http.Request) string {
 		return fmt.Sprintf("%s %s", r.Method, r.URL.Path)
 	})
+	// 路由注册
 	mux := http.NewServeMux()
 	mux.Handle("/", h.router)
 
@@ -495,7 +511,7 @@ func (h *Handler) Run(ctx context.Context) error {
 	}
 
 	mux.Handle(apiPath+"/v1/", http.StripPrefix(apiPath+"/v1", av1))
-
+	// CORS处理
 	mux.Handle(apiPath+"/", http.StripPrefix(apiPath,
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			httputil.SetCORS(w, h.options.CORSOrigin, r)
@@ -510,7 +526,7 @@ func (h *Handler) Run(ctx context.Context) error {
 		ErrorLog:    errlog,
 		ReadTimeout: h.options.ReadTimeout,
 	}
-
+	// 错误chanmel 协程启动httpSrv，grpcSrv，mux 只要一个发生错误，整个函数返回
 	errCh := make(chan error)
 	go func() {
 		errCh <- httpSrv.Serve(httpl)
@@ -526,12 +542,13 @@ func (h *Handler) Run(ctx context.Context) error {
 	case e := <-errCh:
 		return e
 	case <-ctx.Done():
+		// 外部中断处理逻辑
 		httpSrv.Shutdown(ctx)
 		grpcSrv.GracefulStop()
 		return nil
 	}
 }
-
+// 告警页面
 func (h *Handler) alerts(w http.ResponseWriter, r *http.Request) {
 
 	var groups []*rules.Group
