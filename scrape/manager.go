@@ -39,6 +39,7 @@ type Appendable interface {
 }
 
 // NewManager is the Manager constructor
+// scrape管理器
 func NewManager(logger log.Logger, app Appendable) *Manager {
 	if logger == nil {
 		logger = log.NewNopLogger()
@@ -72,12 +73,13 @@ type Manager struct {
 // Run receives and saves target set updates and triggers the scraping loops reloading.
 // Reloading happens in the background so that it doesn't block receiving targets updates.
 // 主函数 外部调用入口
+// tsets channel 在程序的main函数中传入
 func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
 	// 重载配置
 	go m.reloader()
 	for {
 		select {
-		// channel中有新的采集目标，就执行采集任务
+		// 监听channel，发生变化就执行reload函数
 		case ts := <-tsets:
 			// 更新manager中的目标组
 			m.updateTsets(ts)
@@ -95,6 +97,7 @@ func (m *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) error {
 }
 
 func (m *Manager) reloader() {
+	// 时间断续器
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -103,6 +106,7 @@ func (m *Manager) reloader() {
 		// 监听到关闭信号就结束for
 		case <-m.graceShut:
 			return
+		// 每5秒开始监听重载事件
 		case <-ticker.C:
 			select {
 			case <-m.triggerReload:
@@ -115,12 +119,12 @@ func (m *Manager) reloader() {
 	}
 }
 
+// 核心函数，重载scrape
 func (m *Manager) reload() {
 	m.mtxScrape.Lock()
 	var wg sync.WaitGroup
 	// 遍历采集目标执行采集事件
 	// 为每一个目标组 提供一个协程进行采集处理
-	// TODO 在不明确目标组数量的场景下 添加一个协程池 可能会好一点
 	for setName, groups := range m.targetSets {
 		// 构造采集pool
 		if _, ok := m.scrapePools[setName]; !ok {
@@ -129,6 +133,7 @@ func (m *Manager) reload() {
 				level.Error(m.logger).Log("msg", "error reloading target set", "err", "invalid config id:"+setName)
 				continue
 			}
+			// 创建新的scrapePool
 			sp, err := newScrapePool(scrapeConfig, m.append, m.jitterSeed, log.With(m.logger, "scrape_pool", setName))
 			if err != nil {
 				level.Error(m.logger).Log("msg", "error creating new scrape pool", "err", err, "scrape_pool", setName)
@@ -141,6 +146,7 @@ func (m *Manager) reload() {
 		// Run the sync in parallel as these take a while and at high load can't catch up.
 		// 同步执行pool中的采集任务
 		go func(sp *scrapePool, groups []*targetgroup.Group) {
+			// sync(groups) 更新sp中的targets
 			sp.Sync(groups)
 			wg.Done()
 		}(m.scrapePools[setName], groups)
@@ -182,6 +188,7 @@ func (m *Manager) updateTsets(tsets map[string][]*targetgroup.Group) {
 }
 
 // ApplyConfig resets the manager's target providers and job configurations as defined by the new cfg.
+// 重置配置
 func (m *Manager) ApplyConfig(cfg *config.Config) error {
 	m.mtxScrape.Lock()
 	defer m.mtxScrape.Unlock()

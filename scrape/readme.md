@@ -2,11 +2,15 @@
 
 
 #### Manage
-
+    
+    Scrape管理器，主函数run()，监听外部传入的taregts channel；发生变化则更新scrapePool set, 触发reload()事件
+    ScrapePool是针对单个target的scrape管理器，target中discovery模块但targetGroup中获取。
+    断续运行，通过http GET请求获取metric的原始数据，将数据写入数据缓冲区，执行持久化处理。    
+    
+    
 
 #### Target
 
-#### Description
     从discovery的target group中获取数据采集的target集合。
     合并元数据label和自定义label，relabel之后删除元数据label。
     对最终结果进行utf8校验。

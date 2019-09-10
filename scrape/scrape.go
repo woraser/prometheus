@@ -916,7 +916,7 @@ func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 	}
 
 	var last time.Time
-	// 时间触发器
+	// 时间断续器，间隔固定时间运行
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 // 不中断，无限循环数据采集事件
@@ -957,6 +957,7 @@ mainLoop:
 			// NOTE: There were issues with misbehaving clients in the past
 			// that occasionally returned empty results. We don't want those
 			// to falsely reset our buffer size.
+			// 避免返回空值问题，设置lastScrapeSize大小为这次抓取的数据实际大小
 			if len(b) > 0 {
 				sl.lastScrapeSize = len(b)
 			}
@@ -970,7 +971,7 @@ mainLoop:
 
 		// A failed scrape is the same as an empty scrape,
 		// we still call sl.append to trigger stale markers.
-		// 追加数据，等待写入到数据库
+		// 追加数据，等待写入到数据库，在这使用缓存进行性能优化
 		total, added, seriesAdded, appErr := sl.append(b, contentType, start)
 		if appErr != nil {
 			level.Warn(sl.l).Log("msg", "append failed", "err", appErr)
@@ -1066,7 +1067,7 @@ func (sl *scrapeLoop) stop() {
 func (sl *scrapeLoop) append(b []byte, contentType string, ts time.Time) (total, added, seriesAdded int, err error) {
 	var (
 		app            = sl.appender()
-		p              = textparse.New(b, contentType)
+		p              = textparse.New(b, contentType) // parse buffer to PromParser
 		defTime        = timestamp.FromTime(ts)
 		numOutOfOrder  = 0
 		numDuplicates  = 0
@@ -1077,6 +1078,7 @@ func (sl *scrapeLoop) append(b []byte, contentType string, ts time.Time) (total,
 loop:
 	for {
 		var et textparse.Entry
+		// 判断是否结束
 		if et, err = p.Next(); err != nil {
 			if err == io.EOF {
 				err = nil
@@ -1150,6 +1152,7 @@ loop:
 			var lset labels.Labels
 
 			mets := p.Metric(&lset)
+			// 用hash来确定唯一性
 			hash := lset.Hash()
 
 			// Hash label set as it is seen local to the target. Then add target labels
@@ -1194,8 +1197,10 @@ loop:
 			}
 			if tp == nil {
 				// Bypass staleness logic if there is an explicit timestamp.
+				// 如果存在明确的时间戳，则绕过过时逻辑
 				sl.cache.trackStaleness(hash, lset)
 			}
+			// 缓存添加
 			sl.cache.addRef(mets, ref, lset, hash)
 			seriesAdded++
 		}
@@ -1206,6 +1211,7 @@ loop:
 			err = sampleLimitErr
 		}
 		// We only want to increment this once per scrape, so this is Inc'd outside the loop.
+		// target数据抓取次数+1
 		targetScrapeSampleLimit.Inc()
 	}
 	if numOutOfOrder > 0 {
@@ -1218,6 +1224,7 @@ loop:
 		level.Warn(sl.l).Log("msg", "Error on ingesting samples that are too old or are too far into the future", "num_dropped", numOutOfBounds)
 	}
 	if err == nil {
+		// 过时cache处理
 		sl.cache.forEachStale(func(lset labels.Labels) bool {
 			// Series no longer exposed, mark it stale.
 			_, err = app.Add(lset, defTime, math.Float64frombits(value.StaleNaN))
@@ -1234,12 +1241,14 @@ loop:
 		app.Rollback()
 		return total, added, seriesAdded, err
 	}
+	// appendor 缓存数据持久化到数据库中
 	if err := app.Commit(); err != nil {
 		return total, added, seriesAdded, err
 	}
 
 	// Only perform cache cleaning if the scrape was not empty.
 	// An empty scrape (usually) is used to indicate a failed scrape.
+	// scrapeloop缓存清理
 	sl.cache.iterDone(len(b) > 0)
 
 	return total, added, seriesAdded, nil
