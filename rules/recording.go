@@ -30,6 +30,7 @@ import (
 )
 
 // A RecordingRule records its vector expression into new timeseries.
+// 记录规则将表达式结果写入对一个的时序
 type RecordingRule struct {
 	name   string
 	vector promql.Expr
@@ -72,6 +73,7 @@ func (rule *RecordingRule) Labels() labels.Labels {
 }
 
 // Eval evaluates the rule and then overrides the metric names and labels accordingly.
+// 执行rule函数，覆盖对应项
 func (rule *RecordingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, _ *url.URL) (promql.Vector, error) {
 	vector, err := query(ctx, rule.vector.String(), ts)
 	if err != nil {

@@ -38,6 +38,7 @@ import (
 )
 
 // RuleHealth describes the health state of a rule.
+// rule状态
 type RuleHealth string
 
 // The possible health states of a rule based on the last execution.
@@ -74,6 +75,7 @@ type Metrics struct {
 
 // NewGroupMetrics makes a new Metrics and registers them with the provided registerer,
 // if not nil.
+// 注册rule的监控指标，用户模块的自我管理和监控
 func NewGroupMetrics(reg prometheus.Registerer) *Metrics {
 	m := &Metrics{
 		evalDuration: prometheus.NewSummary(
@@ -160,6 +162,7 @@ type QueryFunc func(ctx context.Context, q string, t time.Time) (promql.Vector, 
 // EngineQueryFunc returns a new query function that executes instant queries against
 // the given engine.
 // It converts scalar into vector results.
+// 存储引擎查询方法
 func EngineQueryFunc(engine *promql.Engine, q storage.Queryable) QueryFunc {
 	return func(ctx context.Context, qs string, t time.Time) (promql.Vector, error) {
 		q, err := engine.NewInstantQuery(q, qs, t)
@@ -216,6 +219,7 @@ type Rule interface {
 }
 
 // Group is a set of rules that have a logical relation.
+// 一组有逻辑关系的规则
 type Group struct {
 	name                 string
 	file                 string
@@ -229,7 +233,7 @@ type Group struct {
 	evaluationTimestamp  time.Time
 
 	shouldRestore bool
-
+	// 信号量
 	done       chan struct{}
 	terminated chan struct{}
 
@@ -280,6 +284,7 @@ func (g *Group) run(ctx context.Context) {
 	defer close(g.terminated)
 
 	// Wait an initial amount to have consistently slotted intervals.
+	// 延迟开始时间
 	evalTimestamp := g.evalTimestamp().Add(g.interval)
 	select {
 	case <-time.After(time.Until(evalTimestamp)):
@@ -288,12 +293,14 @@ func (g *Group) run(ctx context.Context) {
 	}
 
 	iter := func() {
+		// 迭代次数+1
 		g.metrics.iterationsScheduled.Inc()
 
 		start := time.Now()
 		g.Eval(ctx, evalTimestamp)
+		// 耗时
 		timeSinceStart := time.Since(start)
-
+		// 设置启动时间等参数
 		g.metrics.iterationDuration.Observe(timeSinceStart.Seconds())
 		g.setEvaluationDuration(timeSinceStart)
 		g.setEvaluationTimestamp(start)
@@ -302,6 +309,7 @@ func (g *Group) run(ctx context.Context) {
 	// The assumption here is that since the ticker was started after having
 	// waited for `evalTimestamp` to pass, the ticks will trigger soon
 	// after each `evalTimestamp + N * g.interval` occurrence.
+	// 断续器
 	tick := time.NewTicker(g.interval)
 	defer tick.Stop()
 
@@ -363,6 +371,7 @@ func (g *Group) hash() uint64 {
 }
 
 // AlertingRules returns the list of the group's alerting rules.
+// 获取group的告警规则
 func (g *Group) AlertingRules() []*AlertingRule {
 	g.mtx.Lock()
 	defer g.mtx.Unlock()
@@ -382,6 +391,7 @@ func (g *Group) AlertingRules() []*AlertingRule {
 }
 
 // HasAlertingRules returns true if the group contains at least one AlertingRule.
+// 判断group是否有告警规则
 func (g *Group) HasAlertingRules() bool {
 	g.mtx.Lock()
 	defer g.mtx.Unlock()
@@ -495,7 +505,9 @@ func (g *Group) CopyState(from *Group) {
 }
 
 // Eval runs a single evaluation cycle in which all rules are evaluated sequentially.
+// 所有rules的一个执行周期
 func (g *Group) Eval(ctx context.Context, ts time.Time) {
+	// 依次处理每个rule
 	for i, rule := range g.rules {
 		select {
 		case <-g.done:
@@ -508,17 +520,19 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 			sp.SetTag("name", rule.Name())
 			defer func(t time.Time) {
 				sp.Finish()
-
+				// 任务完成之后记录时间
 				since := time.Since(t)
 				g.metrics.evalDuration.Observe(since.Seconds())
 				rule.SetEvaluationDuration(since)
 				rule.SetEvaluationTimestamp(t)
 			}(time.Now())
-
+			// 执行次数+1
 			g.metrics.evalTotal.Inc()
-
+			// rule metric执行结果
+			// alert rule对应 alerting.go 中的Eval()函数
 			vector, err := rule.Eval(ctx, ts, g.opts.QueryFunc, g.opts.ExternalURL)
 			if err != nil {
+				// 出错返回
 				// Canceled queries are intentional termination of queries. This normally
 				// happens on shutdown and thus we skip logging of any errors here.
 				if _, ok := err.(promql.ErrQueryCanceled); !ok {
@@ -527,7 +541,7 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 				g.metrics.evalFailures.Inc()
 				return
 			}
-
+			// 如果是告警规则，发送告警信息
 			if ar, ok := rule.(*AlertingRule); ok {
 				ar.sendAlerts(ctx, ts, g.opts.ResendDelay, g.interval, g.opts.NotifyFunc)
 			}
@@ -535,7 +549,7 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 				numOutOfOrder = 0
 				numDuplicates = 0
 			)
-
+			// 获得写入管理器/缓冲器
 			app, err := g.opts.Appendable.Appender()
 			if err != nil {
 				level.Warn(g.logger).Log("msg", "creating appender failed", "err", err)
@@ -543,7 +557,9 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 			}
 
 			seriesReturned := make(map[string]labels.Labels, len(g.seriesInPreviousEval[i]))
+			// 处理查询结果
 			for _, s := range vector {
+				// 写入器中添加查询结果
 				if _, err := app.Add(s.Metric, s.T, s.V); err != nil {
 					switch err {
 					case storage.ErrOutOfOrderSample:
@@ -556,6 +572,7 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 						level.Warn(g.logger).Log("msg", "Rule evaluation result discarded", "err", err, "sample", s)
 					}
 				} else {
+					// 记录返回组
 					seriesReturned[s.Metric.String()] = s.Metric
 				}
 			}
@@ -565,10 +582,11 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 			if numDuplicates > 0 {
 				level.Warn(g.logger).Log("msg", "Error on ingesting results from rule evaluation with different value but same timestamp", "numDropped", numDuplicates)
 			}
-
+			// 处理之前的series,
 			for metric, lset := range g.seriesInPreviousEval[i] {
 				if _, ok := seriesReturned[metric]; !ok {
 					// Series no longer exposed, mark it stale.
+					// 使不用的series过期
 					_, err = app.Add(lset, timestamp.FromTime(ts), math.Float64frombits(value.StaleNaN))
 					switch err {
 					case nil:
@@ -580,6 +598,7 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 					}
 				}
 			}
+			// 数据持久化
 			if err := app.Commit(); err != nil {
 				level.Warn(g.logger).Log("msg", "rule sample appending failed", "err", err)
 			} else {
@@ -587,13 +606,14 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 			}
 		}(i, rule)
 	}
-
+	// 处理失效使series
 	if len(g.staleSeries) != 0 {
 		app, err := g.opts.Appendable.Appender()
 		if err != nil {
 			level.Warn(g.logger).Log("msg", "creating appender failed", "err", err)
 			return
 		}
+		// series失效
 		for _, s := range g.staleSeries {
 			// Rule that produced series no longer configured, mark it stale.
 			_, err = app.Add(s, timestamp.FromTime(ts), math.Float64frombits(value.StaleNaN))
@@ -874,6 +894,7 @@ func (m *Manager) Update(interval time.Duration, files []string, externalLabels 
 }
 
 // LoadGroups reads groups from a list of files.
+// 从文件中加载规则组 rule group
 func (m *Manager) LoadGroups(
 	interval time.Duration, externalLabels labels.Labels, filenames ...string,
 ) (map[string]*Group, []error) {

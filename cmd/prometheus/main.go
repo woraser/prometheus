@@ -648,6 +648,7 @@ func main() {
 	{
 		// Rule manager.告警规则管理
 		// TODO(krasi) refactor ruleManager.Run() to be blocking to avoid using an extra blocking channel.
+		// 重构ruleManager.Run（）以阻止使用额外的阻塞通道
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {

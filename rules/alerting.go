@@ -108,6 +108,7 @@ func (a *Alert) needsSending(ts time.Time, resendDelay time.Duration) bool {
 }
 
 // An AlertingRule generates alerts from its vector expression.
+// 根据结果和告警表达式生产告警
 type AlertingRule struct {
 	// The name of the alert.
 	name string
@@ -143,6 +144,7 @@ type AlertingRule struct {
 }
 
 // NewAlertingRule constructs a new AlertingRule.
+// 生产新的告警规则
 func NewAlertingRule(
 	name string, vec promql.Expr, hold time.Duration,
 	labels, annotations, externalLabels labels.Labels,
@@ -201,6 +203,7 @@ func (r *AlertingRule) Health() RuleHealth {
 }
 
 // Query returns the query expression of the alerting rule.
+// 获取告警规则的告警查询表达式
 func (r *AlertingRule) Query() promql.Expr {
 	return r.vector
 }
@@ -257,6 +260,7 @@ func (r *AlertingRule) forStateSample(alert *Alert, ts time.Time, v float64) pro
 }
 
 // SetEvaluationDuration updates evaluationDuration to the duration it took to evaluate the rule on its last evaluation.
+// 更新执行时间
 func (r *AlertingRule) SetEvaluationDuration(dur time.Duration) {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
@@ -295,24 +299,29 @@ const resolvedRetention = 15 * time.Minute
 
 // Eval evaluates the rule expression and then creates pending alerts and fires
 // or removes previously pending alerts accordingly.
+// 执行规则表达式，创建/更新/停止 对应的告警记录
 func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, externalURL *url.URL) (promql.Vector, error) {
+	// 进行prom查询
 	res, err := query(ctx, r.vector.String(), ts)
 	if err != nil {
+		// 查询失败则设置rule是错误状态
 		r.SetHealth(HealthBad)
 		r.SetLastError(err)
 		return nil, err
 	}
-
+	// 单线程执行
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
 
 	// Create pending alerts for any new vector elements in the alert expression
 	// or update the expression value for existing elements.
+	// 创建新告警或者更新告警
 	resultFPs := map[uint64]struct{}{}
 
 	var vec promql.Vector
 	for _, smpl := range res {
 		// Provide the alert information to the template.
+		// l = {'name':'value'}
 		l := make(map[string]string, len(smpl.Metric))
 		for _, lbl := range smpl.Metric {
 			l[lbl.Name] = lbl.Value
@@ -321,6 +330,7 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 		tmplData := template.AlertTemplateData(l, r.externalLabels, smpl.V)
 		// Inject some convenience variables that are easier to remember for users
 		// who are not used to Go's templating system.
+		// 为不习惯Go模板系统的用户注入一些易于记忆的便利变量。
 		defs := []string{
 			"{{$labels := .Labels}}",
 			"{{$externalLabels := .ExternalLabels}}",
@@ -337,6 +347,7 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 				template.QueryFunc(query),
 				externalURL,
 			)
+			// 处理告警表达式 是否产生告警
 			result, err := tmpl.Expand()
 			if err != nil {
 				result = fmt.Sprintf("<error expanding template: %s>", err)
@@ -363,6 +374,7 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 
 		// Check whether we already have alerting state for the identifying label set.
 		// Update the last value and annotations if so, create a new alert entry otherwise.
+		// 判断告警是否存在，若存在则更新，否则新建
 		if alert, ok := r.active[h]; ok && alert.State != StateInactive {
 			alert.Value = smpl.V
 			alert.Annotations = annotations
