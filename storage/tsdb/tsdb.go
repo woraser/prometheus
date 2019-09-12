@@ -35,12 +35,14 @@ var ErrNotReady = errors.New("TSDB not ready")
 
 // ReadyStorage implements the Storage interface while allowing to set the actual
 // storage at a later point in time.
+// ReadyStorage实现了Storage接口，同时允许在以后的某个时间点设置实际存储。
 type ReadyStorage struct {
 	mtx sync.RWMutex
-	a   *adapter
+	a   *adapter	//adapter 是tsdb对interface定义接口对实现
 }
 
 // Set the storage.
+// 为ReadyStorage设置实际存储器(tsdb)
 func (s *ReadyStorage) Set(db *tsdb.DB, startTimeMargin int64) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
@@ -49,13 +51,14 @@ func (s *ReadyStorage) Set(db *tsdb.DB, startTimeMargin int64) {
 }
 
 // Get the storage.
+// 获取实际存储器
 func (s *ReadyStorage) Get() *tsdb.DB {
 	if x := s.get(); x != nil {
 		return x.db
 	}
 	return nil
 }
-
+// 获取存储适配器
 func (s *ReadyStorage) get() *adapter {
 	s.mtx.RLock()
 	x := s.a
@@ -96,42 +99,53 @@ func (s *ReadyStorage) Close() error {
 }
 
 // Adapter return an adapter as storage.Storage.
+// 适配器作为storage.Storage返回
 func Adapter(db *tsdb.DB, startTimeMargin int64) storage.Storage {
 	return &adapter{db: db, startTimeMargin: startTimeMargin}
 }
 
 // adapter implements a storage.Storage around TSDB.
+// tsdb对适配器，大小写注意
 type adapter struct {
 	db              *tsdb.DB
-	startTimeMargin int64
+	startTimeMargin int64	// 起始时间的冗余时间
 }
 
 // Options of the DB storage.
+// db配置项，在此特指tsdb
 type Options struct {
 	// The timestamp range of head blocks after which they get persisted.
 	// It's the minimum duration of any persisted block.
+	// 所有数据持久块的最小持续时间，也就是一个块存储多长时间内的数据 默认是2h
 	MinBlockDuration model.Duration
 
 	// The maximum timestamp range of compacted blocks.
+	// 压缩后的存储块存储的最大时间范围 一个压缩后的block能存储的数据范围
 	MaxBlockDuration model.Duration
 
 	// The maximum size of each WAL segment file.
+	// 每个日志追加文件的最大值
 	WALSegmentSize units.Base2Bytes
 
 	// Duration for how long to retain data.
+	// 数据在存储块的有效时间
 	RetentionDuration model.Duration
 
 	// Maximum number of bytes to be retained.
+	// 要保留的最大字节数。
 	MaxBytes units.Base2Bytes
 
 	// Disable creation and consideration of lockfile.
+	// 是否禁用lockfile。
 	NoLockfile bool
 
 	// When true it disables the overlapping blocks check.
 	// This in-turn enables vertical compaction and vertical query merge.
+	// 如果为true，则禁用重叠块check.This反过来启用垂直压缩和垂直查询合并。
 	AllowOverlappingBlocks bool
 
 	// When true records in the WAL will be compressed.
+	// wal文件是否需要压缩
 	WALCompression bool
 }
 
@@ -140,7 +154,7 @@ var (
 	headMaxTime prometheus.GaugeFunc
 	headMinTime prometheus.GaugeFunc
 )
-
+// 注册tsdb内置metric
 func registerMetrics(db *tsdb.DB, r prometheus.Registerer) {
 
 	startTime = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
@@ -176,26 +190,31 @@ func registerMetrics(db *tsdb.DB, r prometheus.Registerer) {
 }
 
 // Open returns a new storage backed by a TSDB database that is configured for Prometheus.
+// Open返回一个新对由为Prometheus配置的TSDB数据库支持的存储对象。
 func Open(path string, l log.Logger, r prometheus.Registerer, opts *Options) (*tsdb.DB, error) {
 	if opts.MinBlockDuration > opts.MaxBlockDuration {
 		opts.MaxBlockDuration = opts.MinBlockDuration
 	}
 	// Start with smallest block duration and create exponential buckets until the exceed the
 	// configured maximum block duration.
+	// 以最小的块持续时间开始并创建存储块，直到超过配置的最大持续时间。
+	// rngs 10个数据块的时间区间 time ranges
+	// rngs = [1, 1*3, 1*3*3....]
 	rngs := tsdb.ExponentialBlockRanges(int64(time.Duration(opts.MinBlockDuration).Seconds()*1000), 10, 3)
 
 	for i, v := range rngs {
+		// 遍历数据块，数据块的时间范围不能超过最大值
 		if v > int64(time.Duration(opts.MaxBlockDuration).Seconds()*1000) {
 			rngs = rngs[:i]
 			break
 		}
 	}
-
+	// 打开tsdb存储引擎
 	db, err := tsdb.Open(path, l, r, &tsdb.Options{
 		WALSegmentSize:         int(opts.WALSegmentSize),
 		RetentionDuration:      uint64(time.Duration(opts.RetentionDuration).Seconds() * 1000),
-		MaxBytes:               int64(opts.MaxBytes),
-		BlockRanges:            rngs,
+		MaxBytes:               int64(opts.MaxBytes), // 数据的最大字节数
+		BlockRanges:            rngs,	// 存储块大小范围[a, a*3, a*3*3...]
 		NoLockfile:             opts.NoLockfile,
 		AllowOverlappingBlocks: opts.AllowOverlappingBlocks,
 		WALCompression:         opts.WALCompression,
@@ -209,6 +228,7 @@ func Open(path string, l log.Logger, r prometheus.Registerer, opts *Options) (*t
 }
 
 // StartTime implements the Storage interface.
+// 存储器中最早对数据时间
 func (a adapter) StartTime() (int64, error) {
 	var startTime int64
 
@@ -219,6 +239,7 @@ func (a adapter) StartTime() (int64, error) {
 	}
 
 	// Add a safety margin as it may take a few minutes for everything to spin up.
+	// 添加安全边距，因为可能需要几分钟才能完成所有操作。
 	return startTime + a.startTimeMargin, nil
 }
 

@@ -34,4 +34,10 @@
     
 8. tsdb.go
 
-    tsdb对interface.go中定义接口的实现
+    inerface.go中定义的存储接口的tsdb实现。启动tsdb之后，根据配置项打开存储引擎，
+    并实现接口方法。通过适配器(adapter)的方式来实现接口。
+    
+    
+9. buffer.go
+
+    数据缓存,没理解，下次再补充

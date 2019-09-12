@@ -30,6 +30,8 @@ type BufferedSeriesIterator struct {
 // NewBuffer returns a new iterator that buffers the values within the time range
 // of the current element and the duration of delta before, initialized with an
 // empty iterator. Use Reset() to set an actual iterator to be buffered.
+// NewBuffer返回一个新的迭代器，它缓冲当前元素的时间范围内的值和delta之前的持续时间，
+// 用空迭代器初始化。 使用Reset（）设置要缓冲的实际迭代器。
 func NewBuffer(delta int64) *BufferedSeriesIterator {
 	return NewBufferIterator(&NoopSeriesIt, delta)
 }
@@ -48,6 +50,8 @@ func NewBufferIterator(it SeriesIterator, delta int64) *BufferedSeriesIterator {
 
 // Reset re-uses the buffer with a new iterator, resetting the buffered time
 // delta to its original value.
+// 重置使用新迭代器重新使用缓冲区，重置缓冲时间
+// delta到其原始值。
 func (b *BufferedSeriesIterator) Reset(it SeriesIterator) {
 	b.it = it
 	b.lastTime = math.MinInt64
@@ -138,8 +142,8 @@ type sampleRing struct {
 	delta int64
 
 	buf []sample // lookback buffer
-	i   int      // position of most recent element in ring buffer
-	f   int      // position of first element in ring buffer
+	i   int      // position of most recent element in ring buffer 最新元素的未知
+	f   int      // position of first element in ring buffer 第一个元素的未知
 	l   int      // number of elements in buffer
 
 	it sampleRingIterator
