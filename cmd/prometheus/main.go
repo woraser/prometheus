@@ -480,6 +480,7 @@ func main() {
 
 	// Start all components while we wait for TSDB to open but only load
 	// initial config and mark ourselves as ready after it completed.
+	// 在等待tsdb启动过程中启动其他组件
 	dbOpen := make(chan struct{})
 
 	// sync.Once is used to make sure we can close the channel at different execution stages(SIGTERM or when the config is loaded).
@@ -646,14 +647,14 @@ func main() {
 		)
 	}
 	{
-		// Rule manager.告警规则管理
+		// Rule manager.规则管理
 		// TODO(krasi) refactor ruleManager.Run() to be blocking to avoid using an extra blocking channel.
 		// 重构ruleManager.Run（）以阻止使用额外的阻塞通道
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
 				<-reloadReady.C
-				// 启动告警规则模块
+				// 解除block阻塞启动规则模块
 				ruleManager.Run()
 				<-cancel
 				return nil
@@ -675,6 +676,7 @@ func main() {
 						return errors.New("flag 'storage.tsdb.wal-segment-size' must be set between 10MB and 256MB")
 					}
 				}
+				// tsdb打开
 				db, err := tsdb.Open(
 					cfg.localStoragePath,
 					log.With(logger, "component", "tsdb"),
@@ -684,6 +686,7 @@ func main() {
 				if err != nil {
 					return errors.Wrapf(err, "opening storage failed")
 				}
+				// 日志输出配置项
 				level.Info(logger).Log("fs_type", prom_runtime.Statfs(cfg.localStoragePath))
 				level.Info(logger).Log("msg", "TSDB started")
 				level.Debug(logger).Log("msg", "TSDB options",
@@ -696,7 +699,7 @@ func main() {
 					"AllowOverlappingBlocks", cfg.tsdb.AllowOverlappingBlocks,
 					"WALCompression", cfg.tsdb.WALCompression,
 				)
-
+				// MinBlockDuration 每一个block的最小持续时间
 				startTimeMargin := int64(2 * time.Duration(cfg.tsdb.MinBlockDuration).Seconds() * 1000)
 				localStorage.Set(db, startTimeMargin)
 				close(dbOpen)

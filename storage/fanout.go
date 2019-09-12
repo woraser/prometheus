@@ -26,24 +26,29 @@ import (
 	"github.com/prometheus/prometheus/pkg/labels"
 )
 
+// fanout storage存储的代理抽象层，屏蔽底层local storage和remote storage细节，samples向下双写，合并读取。
+// Remote Storage创建了一个Queue管理器，基于负载轮流发送，读取客户端merge来自远端的数据。
+// Local Storage基于本地磁盘的轻量级时序数据库
 type fanout struct {
 	logger log.Logger
 
-	primary     Storage
-	secondaries []Storage
+	primary     Storage	// 主
+	secondaries []Storage	// 二级
 }
 
 // NewFanout returns a new fan-out Storage, which proxies reads and writes
 // through to multiple underlying storages.
+// 新的存储抽象
 func NewFanout(logger log.Logger, primary Storage, secondaries ...Storage) Storage {
 	return &fanout{
 		logger:      logger,
 		primary:     primary,
-		secondaries: secondaries,
+		secondaries: secondaries,	// 次级存储器，可能有多个
 	}
 }
 
 // StartTime implements the Storage interface.
+// 获取fanout中最早的时间戳(比较primary和secondaries获得)
 func (f *fanout) StartTime() (int64, error) {
 	// StartTime of a fanout should be the earliest StartTime of all its storages,
 	// both primary and secondaries.
@@ -63,11 +68,13 @@ func (f *fanout) StartTime() (int64, error) {
 	}
 	return firstTime, nil
 }
-
+// 查询接口
+// 同时查询primary和secondary，返回查询函数集合
 func (f *fanout) Querier(ctx context.Context, mint, maxt int64) (Querier, error) {
 	queriers := make([]Querier, 0, 1+len(f.secondaries))
 
 	// Add primary querier
+	// primary查询
 	primaryQuerier, err := f.primary.Querier(ctx, mint, maxt)
 	if err != nil {
 		return nil, err
@@ -75,6 +82,7 @@ func (f *fanout) Querier(ctx context.Context, mint, maxt int64) (Querier, error)
 	queriers = append(queriers, primaryQuerier)
 
 	// Add secondary queriers
+	// secondary查询
 	for _, storage := range f.secondaries {
 		querier, err := storage.Querier(ctx, mint, maxt)
 		if err != nil {
@@ -83,10 +91,10 @@ func (f *fanout) Querier(ctx context.Context, mint, maxt int64) (Querier, error)
 		}
 		queriers = append(queriers, querier)
 	}
-
+	// 返回查询器组合
 	return NewMergeQuerier(primaryQuerier, queriers), nil
 }
-
+// 获取fanout的appender集合
 func (f *fanout) Appender() (Appender, error) {
 	primary, err := f.primary.Appender()
 	if err != nil {
@@ -115,9 +123,11 @@ func (f *fanout) Close() error {
 	}
 
 	// TODO return multiple errors?
+	// 只返回最后一个错误，有问题，无法正确的定位错误
 	var lastErr error
 	for _, storage := range f.secondaries {
 		if err := storage.Close(); err != nil {
+			level.Error(f.logger).Log("msg", "Secondary storage Close error", "err", err)
 			lastErr = err
 		}
 	}
@@ -131,7 +141,7 @@ type fanoutAppender struct {
 	primary     Appender
 	secondaries []Appender
 }
-
+// 以下是fanoutAppender对appender接口对实现类,add,addFast,commit,Rollback
 func (f *fanoutAppender) Add(l labels.Labels, t int64, v float64) (uint64, error) {
 	ref, err := f.primary.Add(l, t, v)
 	if err != nil {
@@ -201,9 +211,14 @@ type mergeQuerier struct {
 // NB NewMergeQuerier will return NoopQuerier if no queriers are passed to it,
 // and will filter NoopQueriers from its arguments, in order to reduce overhead
 // when only one querier is passed.
+// NewMergeQuerier返回一个新的查询器，用于合并输入的查询结果。
+// 如果没有向其传递任何查询器，则NewMergeQuerier将返回NoopQuerier，
+// 并将从其参数中过滤NoopQueriers，以便在仅传递一个查询器时减少开销。
 func NewMergeQuerier(primaryQuerier Querier, queriers []Querier) Querier {
 	filtered := make([]Querier, 0, len(queriers))
+	// 过滤queriers中的空查询器
 	for _, querier := range queriers {
+		// NoopQuerier 空查询器
 		if querier != NoopQuerier() {
 			filtered = append(filtered, querier)
 		}
@@ -211,7 +226,7 @@ func NewMergeQuerier(primaryQuerier Querier, queriers []Querier) Querier {
 
 	setQuerierMap := make(map[SeriesSet]Querier)
 	failedQueriers := make(map[Querier]struct{})
-
+	// 根据过滤结果返回
 	switch len(filtered) {
 	case 0:
 		return NoopQuerier()
@@ -228,13 +243,18 @@ func NewMergeQuerier(primaryQuerier Querier, queriers []Querier) Querier {
 }
 
 // Select returns a set of series that matches the given label matchers.
+// 返回符合指定label的series
+// Core function
 func (q *mergeQuerier) Select(params *SelectParams, matchers ...*labels.Matcher) (SeriesSet, Warnings, error) {
 	seriesSets := make([]SeriesSet, 0, len(q.queriers))
 	var warnings Warnings
 	for _, querier := range q.queriers {
+		// 从每一个查询器中获取查询结果
 		set, wrn, err := querier.Select(params, matchers...)
+		// {query set:querier}
 		q.setQuerierMap[set] = querier
 		if wrn != nil {
+			// 错误合并
 			warnings = append(warnings, wrn...)
 		}
 		if err != nil {
@@ -247,6 +267,7 @@ func (q *mergeQuerier) Select(params *SelectParams, matchers ...*labels.Matcher)
 				return nil, nil, err
 			}
 		}
+		// 结果集
 		seriesSets = append(seriesSets, set)
 	}
 	return NewMergeSeriesSet(seriesSets, q), warnings, nil
@@ -281,7 +302,7 @@ func (q *mergeQuerier) IsFailedSet(set SeriesSet) bool {
 	_, isFailedQuerier := q.failedQueriers[q.setQuerierMap[set]]
 	return isFailedQuerier
 }
-
+// 合并数组
 func mergeStringSlices(ss [][]string) []string {
 	switch len(ss) {
 	case 0:
@@ -322,6 +343,7 @@ func mergeTwoStringSlices(a, b []string) []string {
 }
 
 // LabelNames returns all the unique label names present in the block in sorted order.
+// 返回block中的所有唯一label
 func (q *mergeQuerier) LabelNames() ([]string, Warnings, error) {
 	labelNamesMap := make(map[string]struct{})
 	var warnings Warnings
@@ -401,20 +423,27 @@ func NewMergeSeriesSet(sets []SeriesSet, querier *mergeQuerier) SeriesSet {
 		querier: querier,
 	}
 }
-
+//	循环迭代
 func (c *mergeSeriesSet) Next() bool {
 	// Run in a loop because the "next" series sets may not be valid anymore.
 	// If a remote querier fails, we discard all series sets from that querier.
 	// If, for the current label set, all the next series sets come from
 	// failed remote storage sources, we want to keep trying with the next label set.
+	// 当远程查询器失败时，我们把这个查询器中当所有series都丢弃。
+	// 如果，对于当前标签集，所有都series都来自失败的远程存储源，我们想继续尝试下一个标签集。
 	for {
 		// Firstly advance all the current series sets.  If any of them have run out
 		// we can drop them, otherwise they should be inserted back into the heap.
+		// 首先推进所有当前的系列集。 如果他们中的任何一个用完了
+		// 我们可以删除它们，否则它们应该插回到堆中。
 		for _, set := range c.currentSets {
+			// 如果当前series有下一个，将下一个值存入heap中
 			if set.Next() {
+				// heap 堆
 				heap.Push(&c.heap, set)
 			}
 		}
+		// len(c.heap) == 0 代表当前已经是最后一个，无法迭代了
 		if len(c.heap) == 0 {
 			return false
 		}
@@ -422,23 +451,27 @@ func (c *mergeSeriesSet) Next() bool {
 		// Now, pop items of the heap that have equal label sets.
 		c.currentSets = nil
 		c.currentLabels = c.heap[0].At().Labels()
+		// 把heap中非失败set全部存入当前set中
 		for len(c.heap) > 0 && labels.Equal(c.currentLabels, c.heap[0].At().Labels()) {
 			set := heap.Pop(&c.heap).(SeriesSet)
 			if c.querier != nil && c.querier.IsFailedSet(set) {
 				continue
 			}
+			// 将no failed的set转存到当前sets中
 			c.currentSets = append(c.currentSets, set)
 		}
 
 		// As long as the current set contains at least 1 set,
 		// then it should return true.
+		// 只要当前set集合包含一个set，就返回true
+		// 如果=0，代表没有no failed的set，无法进行下次迭代，直接推出循环
 		if len(c.currentSets) != 0 {
 			break
 		}
 	}
 	return true
 }
-
+// 返回当前的时序键值对，点位点
 func (c *mergeSeriesSet) At() Series {
 	if len(c.currentSets) == 1 {
 		return c.currentSets[0].At()
@@ -461,7 +494,7 @@ func (c *mergeSeriesSet) Err() error {
 	}
 	return nil
 }
-
+// seriesSetHeap 有序集合，可排序
 type seriesSetHeap []SeriesSet
 
 func (h seriesSetHeap) Len() int      { return len(h) }
@@ -483,7 +516,7 @@ func (h *seriesSetHeap) Pop() interface{} {
 	*h = old[0 : n-1]
 	return x
 }
-
+// 对键值对结果集
 type mergeSeries struct {
 	labels labels.Labels
 	series []Series
@@ -495,6 +528,7 @@ func (m *mergeSeries) Labels() labels.Labels {
 
 func (m *mergeSeries) Iterator() SeriesIterator {
 	iterators := make([]SeriesIterator, 0, len(m.series))
+	// Series to iterators
 	for _, s := range m.series {
 		iterators = append(iterators, s.Iterator())
 	}
@@ -522,7 +556,7 @@ func (c *mergeIterator) Seek(t int64) bool {
 	}
 	return len(c.h) > 0
 }
-
+// 返回键值对
 func (c *mergeIterator) At() (t int64, v float64) {
 	if len(c.h) == 0 {
 		panic("mergeIterator.At() called after .Next() returned false.")
@@ -530,7 +564,7 @@ func (c *mergeIterator) At() (t int64, v float64) {
 
 	return c.h[0].At()
 }
-
+// 迭代
 func (c *mergeIterator) Next() bool {
 	if c.h == nil {
 		for _, iter := range c.iterators {
@@ -570,7 +604,7 @@ func (c *mergeIterator) Err() error {
 	}
 	return nil
 }
-
+// series迭代用heap
 type seriesIteratorHeap []SeriesIterator
 
 func (h seriesIteratorHeap) Len() int      { return len(h) }

@@ -64,6 +64,7 @@ func (noopSeriesSet) Err() error {
 type noopSeriesIterator struct{}
 
 // NoopSeriesIt is a SeriesIterator that does nothing.
+// 同样不干实事的迭代器
 var NoopSeriesIt = noopSeriesIterator{}
 
 func (noopSeriesIterator) At() (int64, float64) {

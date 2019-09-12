@@ -30,13 +30,16 @@ var (
 
 // Storage ingests and manages samples, along with various indexes. All methods
 // are goroutine-safe. Storage implements storage.SampleAppender.
+// 存储接口，所有方法都是协程安全
 type Storage interface {
 	Queryable
 
 	// StartTime returns the oldest timestamp stored in the storage.
+	// 存储中最早的时间戳
 	StartTime() (int64, error)
 
 	// Appender returns a new appender against the storage.
+	// 批量追加器
 	Appender() (Appender, error)
 
 	// Close closes the storage and all its underlying resources.
@@ -44,14 +47,17 @@ type Storage interface {
 }
 
 // A Queryable handles queries against a storage.
+// 存储的查询方法
 type Queryable interface {
 	// Querier returns a new Querier on the storage.
 	Querier(ctx context.Context, mint, maxt int64) (Querier, error)
 }
 
 // Querier provides reading access to time series data.
+// 查询器提供对时间序列数据的读取访问。
 type Querier interface {
 	// Select returns a set of series that matches the given label matchers.
+	// 返回符合查询要求的数据
 	Select(*SelectParams, ...*labels.Matcher) (SeriesSet, Warnings, error)
 
 	// LabelValues returns all potential values for a label name.
@@ -65,6 +71,7 @@ type Querier interface {
 }
 
 // SelectParams specifies parameters passed to data selections.
+// 查询参数结构体
 type SelectParams struct {
 	Start int64 // Start time in milliseconds for this select.
 	End   int64 // End time in milliseconds for this select.
@@ -75,14 +82,17 @@ type SelectParams struct {
 
 // QueryableFunc is an adapter to allow the use of ordinary functions as
 // Queryables. It follows the idea of http.HandlerFunc.
+// QueryableFunc是一个允许使用普通函数asQueryables的适配器。 它遵循http.HandlerFunc规则
 type QueryableFunc func(ctx context.Context, mint, maxt int64) (Querier, error)
 
 // Querier calls f() with the given parameters.
+// 根据指定参数执行查询
 func (f QueryableFunc) Querier(ctx context.Context, mint, maxt int64) (Querier, error) {
 	return f(ctx, mint, maxt)
 }
 
 // Appender provides batched appends against a storage.
+// 批量写入器，用于实现批量写入到存储器中
 type Appender interface {
 	Add(l labels.Labels, t int64, v float64) (uint64, error)
 
@@ -95,6 +105,7 @@ type Appender interface {
 }
 
 // SeriesSet contains a set of series.
+// 序列集合
 type SeriesSet interface {
 	Next() bool
 	At() Series
@@ -102,24 +113,31 @@ type SeriesSet interface {
 }
 
 // Series represents a single time series.
+// 单个时间序列
 type Series interface {
 	// Labels returns the complete set of labels identifying the series.
 	Labels() labels.Labels
 
 	// Iterator returns a new iterator of the data of the series.
+	// 返回数据集
 	Iterator() SeriesIterator
 }
 
 // SeriesIterator iterates over the data of a time series.
+// SeriesIterator迭代时间序列的数据
 type SeriesIterator interface {
 	// Seek advances the iterator forward to the value at or after
 	// the given timestamp.
+	// 给定时间戳进行定位
 	Seek(t int64) bool
 	// At returns the current timestamp/value pair.
+	// 当前的键值对
 	At() (t int64, v float64)
 	// Next advances the iterator by one.
+	// 迭代器迭代到下一个
 	Next() bool
 	// Err returns the current error.
+	// 返回当前到错误信息
 	Err() error
 }
 
