@@ -71,7 +71,7 @@ var (
 		Name: "prometheus_config_last_reload_success_timestamp_seconds",
 		Help: "Timestamp of the last successful configuration reload.",
 	})
-	//默认的数据的持久化时间 15d
+	//默认的数据的保留时间 15d
 	defaultRetentionString   = "15d"
 	defaultRetentionDuration model.Duration
 )
@@ -79,7 +79,7 @@ var (
 func init() {
 	//prometheus注册采集器
 	prometheus.MustRegister(version.NewCollector("prometheus"))
-	//申明数据保留时间，比如有效，否则奔溃
+	//申明数据保留时间，出错则崩溃
 	var err error
 	defaultRetentionDuration, err = model.ParseDuration(defaultRetentionString)
 	if err != nil {
@@ -113,7 +113,7 @@ func main() {
 		lookbackDelta       model.Duration //允许在表达式评估期间检索度量标准的差异。
 		webTimeout          model.Duration
 		queryTimeout        model.Duration
-		queryConcurrency    int
+		queryConcurrency    int	// 查询并发数
 		queryMaxSamples     int
 		RemoteFlushDeadline model.Duration //原创刷新
 
@@ -282,7 +282,7 @@ func main() {
 	// RoutePrefix must always be at least '/'.
 	cfg.web.RoutePrefix = "/" + strings.Trim(cfg.web.RoutePrefix, "/")
 
-	//tsdb 设置
+	// tsdb 设置
 	{ // Time retention settings. 持久化的时间设置
 		if oldFlagRetentionDuration != 0 {
 			level.Warn(logger).Log("deprecation_notice", "'storage.tsdb.retention' flag is deprecated use 'storage.tsdb.retention.time' instead.")
@@ -300,6 +300,7 @@ func main() {
 		}
 
 		// Check for overflows. This limits our max retention to 100y.
+		// 检查是否有溢出。 这将我们的最大保留期限制为100y
 		if cfg.tsdb.RetentionDuration < 0 {
 			y, err := model.ParseDuration("100y")
 			if err != nil {
@@ -310,13 +311,15 @@ func main() {
 		}
 	}
 
-	{ // Max block size  settings. 持久化的存储快大小设置
+	{ // Max block size  settings. 存储块的最大持续时间设置
 		if cfg.tsdb.MaxBlockDuration == 0 {
 			maxBlockDuration, err := model.ParseDuration("31d")
 			if err != nil {
 				panic(err)
 			}
 			// When the time retention is set and not too big use to define the max block duration.
+			// 设置时间保留时，不要定义太大的最大块持续时间。
+			// 存储快保留时间/10 < block的最大持续时间
 			if cfg.tsdb.RetentionDuration != 0 && cfg.tsdb.RetentionDuration/10 < maxBlockDuration {
 				maxBlockDuration = cfg.tsdb.RetentionDuration / 10
 			}
@@ -343,11 +346,11 @@ func main() {
 	level.Info(logger).Log("vm_limits", prom_runtime.VmLimits())
 
 	var (
-		//本地存储
+		// 本地存储
 		localStorage  = &tsdb.ReadyStorage{}
-		//远程存储
+		// 远程存储
 		remoteStorage = remote.NewStorage(log.With(logger, "component", "remote"), prometheus.DefaultRegisterer, localStorage.StartTime, cfg.localStoragePath, time.Duration(cfg.RemoteFlushDeadline))
-		//存储抽象
+		// 存储抽象
 		fanoutStorage = storage.NewFanout(logger, localStorage, remoteStorage)
 	)
 
@@ -358,12 +361,13 @@ func main() {
 		notifierManager = notifier.NewManager(&cfg.notifier, log.With(logger, "component", "notifier"))
 
 		ctxScrape, cancelScrape = context.WithCancel(context.Background())
-
+		// 创建服务发现管理器
 		discoveryManagerScrape  = discovery.NewManager(ctxScrape, log.With(logger, "component", "discovery manager scrape"), discovery.Name("scrape"))
 
 		ctxNotify, cancelNotify = context.WithCancel(context.Background())
+		// 服务器发现的通知器
 		discoveryManagerNotify  = discovery.NewManager(ctxNotify, log.With(logger, "component", "discovery manager notify"), discovery.Name("notify"))
-
+		// 数据采集管理器
 		scrapeManager = scrape.NewManager(log.With(logger, "component", "scrape manager"), fanoutStorage)
 
 		opts = promql.EngineOpts{
@@ -376,7 +380,7 @@ func main() {
 		}
 		//promql 查询引擎
 		queryEngine = promql.NewEngine(opts)
-
+		// 新建规则管理器
 		ruleManager = rules.NewManager(&rules.ManagerOptions{
 			Appendable:      fanoutStorage,
 			TSDB:            localStorage,
@@ -426,10 +430,11 @@ func main() {
 	webHandler := web.New(log.With(logger, "component", "web"), &cfg.web)
 
 	// Monitor outgoing connections on default transport with conntrack.
+	// 监控connection
 	http.DefaultTransport.(*http.Transport).DialContext = conntrack.NewDialContextFunc(
 		conntrack.DialWithTracing(),
 	)
-
+	// 重载器
 	reloaders := []func(cfg *config.Config) error{
 		remoteStorage.ApplyConfig,
 		webHandler.ApplyConfig,
@@ -484,6 +489,7 @@ func main() {
 	dbOpen := make(chan struct{})
 
 	// sync.Once is used to make sure we can close the channel at different execution stages(SIGTERM or when the config is loaded).
+	// sync.Once用于确保我们可以在不同的执行阶段（SIGTERM或加载配置时）关闭通道。
 	type closeOnce struct {
 		C     chan struct{}
 		once  sync.Once
