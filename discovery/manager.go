@@ -167,15 +167,17 @@ type Manager struct {
 	providers []*provider
 	// The sync channel sends the updates as a map where the key is the job value from the scrape config.
 	// 同步通道将更新作为映射发送，其中键是来自scrape配置的作业值。
+	// scrape模块使用 在main的run()方法中调用
 	syncCh chan map[string][]*targetgroup.Group
 
 	// How long to wait before sending updates to the channel. The variable
 	// should only be modified in unit tests.
-	// 修改的更新等待事件
+	// 在向channel发送更新之前等待多长时间,用于限制channel更新频率。
+	// 默认是5s,只能在测试用例中修改,不能通过配置文件修改。
 	updatert time.Duration
 
 	// The triggerSend channel signals to the manager that new updates have been received from providers.
-	// 服务发现跟新时触发通知
+	// 服务发现更新时触发通知 更新触发器
 	triggerSend chan struct{}
 }
 
@@ -198,7 +200,7 @@ func (m *Manager) SyncCh() <-chan map[string][]*targetgroup.Group {
 }
 
 // ApplyConfig removes all running discovery providers and starts new ones using the provided config.
-// 重置SD
+// 应用配置文件，重置SD，删除所有正在运行的发现提供程序，并使用提供的配置启
 func (m *Manager) ApplyConfig(cfg map[string]sd_config.ServiceDiscoveryConfig) error {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
@@ -208,11 +210,14 @@ func (m *Manager) ApplyConfig(cfg map[string]sd_config.ServiceDiscoveryConfig) e
 			discoveredTargets.DeleteLabelValues(m.name, pk.setName)
 		}
 	}
+	// 清空discovery
 	m.cancelDiscoverers()
 	for name, scfg := range cfg {
+		// 注册discovery的provider，例如consule，file，etcd....
 		m.registerProviders(scfg, name)
 		discoveredTargets.WithLabelValues(m.name, name).Set(0)
 	}
+	// 启动provider
 	for _, prov := range m.providers {
 		m.startProvider(m.ctx, prov)
 	}
@@ -230,24 +235,27 @@ func (m *Manager) StartCustomProvider(ctx context.Context, name string, worker D
 	m.providers = append(m.providers, p)
 	m.startProvider(ctx, p)
 }
-
+// 启动provider 每个provider都实现了共同的接口
 func (m *Manager) startProvider(ctx context.Context, p *provider) {
 	level.Debug(m.logger).Log("msg", "Starting provider", "provider", p.name, "subs", fmt.Sprintf("%v", p.subs))
 	ctx, cancel := context.WithCancel(ctx)
 	updates := make(chan []*targetgroup.Group)
 
 	m.discoverCancel = append(m.discoverCancel, cancel)
-
+	// run provider实现了discovery的run()接口
 	go p.d.Run(ctx, updates)
+	// 启动更新器
 	go m.updater(ctx, p, updates)
 }
-
+// 启动更新器
 func (m *Manager) updater(ctx context.Context, p *provider, updates chan []*targetgroup.Group) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		// updates不为空
 		case tgs, ok := <-updates:
+			// 接受到的更新次数+1
 			receivedUpdates.WithLabelValues(m.name).Inc()
 			if !ok {
 				level.Debug(m.logger).Log("msg", "discoverer channel closed", "provider", p.name)
@@ -259,6 +267,7 @@ func (m *Manager) updater(ctx context.Context, p *provider, updates chan []*targ
 			}
 
 			select {
+			// 触发更新，provider有新的更新内容
 			case m.triggerSend <- struct{}{}:
 			default:
 			}
@@ -267,6 +276,7 @@ func (m *Manager) updater(ctx context.Context, p *provider, updates chan []*targ
 }
 
 func (m *Manager) sender() {
+	// 断续器 限制服务发现频率
 	ticker := time.NewTicker(m.updatert)
 	defer ticker.Stop()
 
@@ -277,10 +287,12 @@ func (m *Manager) sender() {
 		case <-ticker.C: // Some discoverers send updates too often so we throttle these with the ticker.
 			select {
 			case <-m.triggerSend:
+				// 更新次数+1
 				sentUpdates.WithLabelValues(m.name).Inc()
 				select {
 				case m.syncCh <- m.allGroups():
 				default:
+					// 未发生的更新次数+1
 					delayedUpdates.WithLabelValues(m.name).Inc()
 					level.Debug(m.logger).Log("msg", "discovery receiver's channel was full so will retry the next cycle")
 					select {
@@ -293,16 +305,18 @@ func (m *Manager) sender() {
 		}
 	}
 }
-
+// 关闭所有的发现服务 清空数据
 func (m *Manager) cancelDiscoverers() {
+	// 执行关闭函数
 	for _, c := range m.discoverCancel {
 		c()
 	}
+	// 清空数据
 	m.targets = make(map[poolKey]map[string]*targetgroup.Group)
 	m.providers = nil
 	m.discoverCancel = nil
 }
-
+// 根据传入参数 更新m.targets
 func (m *Manager) updateGroup(poolKey poolKey, tgs []*targetgroup.Group) {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
@@ -316,20 +330,24 @@ func (m *Manager) updateGroup(poolKey poolKey, tgs []*targetgroup.Group) {
 		}
 	}
 }
-
+// 搜集m.targets，整合为targetgroup，返回新的tSets变量
 func (m *Manager) allGroups() map[string][]*targetgroup.Group {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 
 	tSets := map[string][]*targetgroup.Group{}
+	// 遍历m.targets
 	for pkey, tsets := range m.targets {
-		var n int
+		var n int	// targets总数
 		for _, tg := range tsets {
 			// Even if the target group 'tg' is empty we still need to send it to the 'Scrape manager'
 			// to signal that it needs to stop all scrape loops for this target set.
+			// 即使目标组'tg'为空，我们仍然需要将它发送到'Scrape manager'，
+			// 以表示它需要停止此目标集的所有scrape循环。
 			tSets[pkey.setName] = append(tSets[pkey.setName], tg)
 			n += len(tg.Targets)
 		}
+		// 记录targets总数
 		discoveredTargets.WithLabelValues(m.name, pkey.setName).Set(float64(n))
 	}
 	return tSets
