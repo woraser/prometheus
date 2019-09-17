@@ -185,6 +185,7 @@ type Manager struct {
 // Run starts the background processing
 // 启动后台运行服务,在/cmd/prometheus main.go文件中调用
 func (m *Manager) Run() error {
+	// 启动sender服务
 	go m.sender()
 	for range m.ctx.Done() {
 		m.cancelDiscoverers()

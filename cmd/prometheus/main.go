@@ -361,11 +361,11 @@ func main() {
 		notifierManager = notifier.NewManager(&cfg.notifier, log.With(logger, "component", "notifier"))
 
 		ctxScrape, cancelScrape = context.WithCancel(context.Background())
-		// 创建服务发现管理器
+		// 服务发现管-scrape
 		discoveryManagerScrape  = discovery.NewManager(ctxScrape, log.With(logger, "component", "discovery manager scrape"), discovery.Name("scrape"))
 
 		ctxNotify, cancelNotify = context.WithCancel(context.Background())
-		// 服务器发现的通知器
+		// 服务发现管-alertmanager
 		discoveryManagerNotify  = discovery.NewManager(ctxNotify, log.With(logger, "component", "discovery manager notify"), discovery.Name("notify"))
 		// 数据采集管理器
 		scrapeManager = scrape.NewManager(log.With(logger, "component", "scrape manager"), fanoutStorage)
@@ -434,7 +434,7 @@ func main() {
 	http.DefaultTransport.(*http.Transport).DialContext = conntrack.NewDialContextFunc(
 		conntrack.DialWithTracing(),
 	)
-	// 重载器
+	// 配置文件载入方法集合
 	reloaders := []func(cfg *config.Config) error{
 		remoteStorage.ApplyConfig,
 		webHandler.ApplyConfig,
