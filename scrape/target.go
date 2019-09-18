@@ -434,18 +434,19 @@ func populateLabels(lset labels.Labels, cfg *config.ScrapeConfig) (res, orig lab
 
 // targetsFromGroup builds targets based on the given TargetGroup and config.
 // 从config和group中构建目标组
-// 从discovery中获取targetgroup
+// 从targetgroup中提取targets
 func targetsFromGroup(tg *targetgroup.Group, cfg *config.ScrapeConfig) ([]*Target, error) {
 	// targets数组
 	targets := make([]*Target, 0, len(tg.Targets))
 
 	for i, tlset := range tg.Targets {
-		// 当前target的labels数组
+		// 当前target的labels数组 当前容量=target.labels+group.labels
 		lbls := make([]labels.Label, 0, len(tlset)+len(tg.Labels))
-		// 合并labels
+		// 合并labels target.labels->lbls
 		for ln, lv := range tlset {
 			lbls = append(lbls, labels.Label{Name: string(ln), Value: string(lv)})
 		}
+		// 如果tg.Labels不在target.labels中，也添加到lbls中
 		for ln, lv := range tg.Labels {
 			if _, ok := tlset[ln]; !ok {
 				lbls = append(lbls, labels.Label{Name: string(ln), Value: string(lv)})
@@ -453,12 +454,13 @@ func targetsFromGroup(tg *targetgroup.Group, cfg *config.ScrapeConfig) ([]*Targe
 		}
 		// 构建label，lbls中的label必须唯一
 		lset := labels.New(lbls...)
-
+		// 根据配置补全labels
 		lbls, origLabels, err := populateLabels(lset, cfg)
 		if err != nil {
 			return nil, errors.Wrapf(err, "instance %d in group %s", i, tg)
 		}
 		if lbls != nil || origLabels != nil {
+			// 将新构造的target对象存入targets集合中
 			targets = append(targets, NewTarget(lbls, origLabels, cfg.Params))
 		}
 	}

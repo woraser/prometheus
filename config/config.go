@@ -345,8 +345,10 @@ type ScrapeConfig struct {
 	// The job name to which the job label is set by default.
 	JobName string `yaml:"job_name"`
 	// Indicator whether the scraped metrics should remain unmodified.
+	// 标示已删除的指标是否应保持不变。
 	HonorLabels bool `yaml:"honor_labels,omitempty"`
 	// Indicator whether the scraped timestamps should be respected.
+	// 指示是否应该遵守已删除的时间戳
 	HonorTimestamps bool `yaml:"honor_timestamps"`
 	// A set of query parameters with which the target is scraped.
 	Params url.Values `yaml:"params,omitempty"`
@@ -359,6 +361,7 @@ type ScrapeConfig struct {
 	// The URL scheme with which to fetch metrics from targets.
 	Scheme string `yaml:"scheme,omitempty"`
 	// More than this many samples post metric-relabelling will cause the scrape to fail.
+	// sample最大数量，超过则会导致数据采集失败
 	SampleLimit uint `yaml:"sample_limit,omitempty"`
 
 	// We cannot do proper Go type embedding below as the parser will then parse

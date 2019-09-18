@@ -63,8 +63,8 @@ type Manager struct {
 
 	jitterSeed    uint64     // Global jitterSeed seed is used to spread scrape workload across HA setup.
 	mtxScrape     sync.Mutex // Guards the fields below.
-	scrapeConfigs map[string]*config.ScrapeConfig
-	scrapePools   map[string]*scrapePool
+	scrapeConfigs map[string]*config.ScrapeConfig	// scrape配置文件字典
+	scrapePools   map[string]*scrapePool	// scrapepool 字典
 	targetSets    map[string][]*targetgroup.Group
 
 	triggerReload chan struct{}
@@ -204,12 +204,15 @@ func (m *Manager) ApplyConfig(cfg *config.Config) error {
 	}
 
 	// Cleanup and reload pool if the configuration has changed.
+	// 判断当前manager中的pool是否在config中存在；若不存在，直接删除
 	var failed bool
 	for name, sp := range m.scrapePools {
 		if cfg, ok := m.scrapeConfigs[name]; !ok {
+			// 停止切删除pool
 			sp.stop()
 			delete(m.scrapePools, name)
 		} else if !reflect.DeepEqual(sp.config, cfg) {
+			// 配置文件对比失败
 			err := sp.reload(cfg)
 			if err != nil {
 				level.Error(m.logger).Log("msg", "error reloading scrape pool", "err", err, "scrape_pool", name)
