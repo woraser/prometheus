@@ -103,14 +103,14 @@ func (m *Manager) reloader() {
 
 	for {
 		select {
-		// 监听到关闭信号就结束for
+		// 监听到关闭信号就结束循环
 		case <-m.graceShut:
 			return
-		// 每5秒开始监听重载事件
+		// 每5秒开始监听重载事件，限制更新次数
 		case <-ticker.C:
 			select {
 			case <-m.triggerReload:
-				// run中没采集一次数据，就要求执行一次reload
+				// run参数每更新一次，就要求执行一次reload
 				m.reload()
 			case <-m.graceShut:
 				return
@@ -144,9 +144,10 @@ func (m *Manager) reload() {
 
 		wg.Add(1)
 		// Run the sync in parallel as these take a while and at high load can't catch up.
-		// 同步执行pool中的采集任务
+		// 并行运行同步，因为这些需要一段时间，高负载无法赶上。
+		// 异步更新pool，执行pool中的采集任务
 		go func(sp *scrapePool, groups []*targetgroup.Group) {
-			// sync(groups) 更新sp中的targets
+			// 更新sp中的targets
 			sp.Sync(groups)
 			wg.Done()
 		}(m.scrapePools[setName], groups)
@@ -204,15 +205,16 @@ func (m *Manager) ApplyConfig(cfg *config.Config) error {
 	}
 
 	// Cleanup and reload pool if the configuration has changed.
+	// 更新manager中的scrapePool
 	// 判断当前manager中的pool是否在config中存在；若不存在，直接删除
 	var failed bool
 	for name, sp := range m.scrapePools {
 		if cfg, ok := m.scrapeConfigs[name]; !ok {
-			// 停止切删除pool
+			// 停止且删除pool
 			sp.stop()
 			delete(m.scrapePools, name)
 		} else if !reflect.DeepEqual(sp.config, cfg) {
-			// 配置文件对比失败
+			// 配置文件对比失败 进行重载操作
 			err := sp.reload(cfg)
 			if err != nil {
 				level.Error(m.logger).Log("msg", "error reloading scrape pool", "err", err, "scrape_pool", name)
