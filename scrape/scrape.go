@@ -360,7 +360,7 @@ func (sp *scrapePool) reload(cfg *config.ScrapeConfig) error {
 
 // Sync converts target groups into actual scrape targets and synchronizes
 // the currently running scraper with the resulting set and returns all scraped and dropped targets.
-// 同步target 返回采集结果
+// 同步targets
 func (sp *scrapePool) Sync(tgs []*targetgroup.Group) {
 	start := time.Now()
 	// 有效target集合
@@ -375,13 +375,15 @@ func (sp *scrapePool) Sync(tgs []*targetgroup.Group) {
 			level.Error(sp.logger).Log("msg", "creating targets failed", "err", err)
 			continue
 		}
-		// check targets
-		// 如果target的labels存在，则代表是有效目标，可以开启采集任务，
-		// 否则把target放在scrapePool的droppedTargets集合中
+		// 校验targets
+		// 如果target的labels存在，则代表是有效目标，允许开启采集任务，
+		// 反之则把target放在scrapePool的droppedTargets集合中。
 		for _, t := range targets {
 			if t.Labels().Len() > 0 {
+				// 有效
 				all = append(all, t)
 			} else if t.DiscoveredLabels().Len() > 0 {
+				// 无效
 				sp.droppedTargets = append(sp.droppedTargets, t)
 			}
 		}
@@ -389,7 +391,7 @@ func (sp *scrapePool) Sync(tgs []*targetgroup.Group) {
 	sp.mtx.Unlock()
 	// 对比现在和传入的targets，启动采集任务
 	sp.sync(all)
-	// 自定义的metrics设置
+	// metrics设置
 	targetSyncIntervalLength.WithLabelValues(sp.config.JobName).Observe(
 		time.Since(start).Seconds(),
 	)
@@ -457,9 +459,7 @@ func (sp *scrapePool) sync(targets []*Target) {
 		if _, ok := uniqueTargets[hash]; !ok {
 			wg.Add(1)
 			go func(l loop) {
-
 				l.stop()
-
 				wg.Done()
 			}(sp.loops[hash])
 
@@ -497,7 +497,7 @@ func mutateSampleLabels(lset labels.Labels, target *Target, honor bool, rc []*re
 	}
 
 	res := lb.Labels()
-
+	// relabel 操作
 	if len(rc) > 0 {
 		res = relabel.Process(res, rc...)
 	}
@@ -921,7 +921,7 @@ func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 	select {
 	case <-time.After(sl.scraper.offset(interval, sl.jitterSeed)):
 		// Continue after a scraping offset.
-		// 等待一个采集周期之后运行
+		// 等待一个采集周期之后运行，减少压力
 	case <-sl.ctx.Done():
 		close(sl.stopped)
 		return
@@ -934,7 +934,7 @@ func (sl *scrapeLoop) run(interval, timeout time.Duration, errc chan<- error) {
 // 不中断，无限循环数据采集事件
 mainLoop:
 	for {
-		// 是否出现停止事件，默认循环执行主逻辑
+		// 检查是否出现中断信号，默认循环执行主逻辑
 		select {
 		case <-sl.parentCtx.Done():
 			close(sl.stopped)
@@ -986,7 +986,7 @@ mainLoop:
 
 		// A failed scrape is the same as an empty scrape,
 		// we still call sl.append to trigger stale markers.
-		// 追加数据，等待写入到数据库，在这使用缓存进行性能优化
+		// 追加数据，等待写入到数据库，在这使用缓存进行性能优化scrapeCache
 		total, added, seriesAdded, appErr := sl.append(b, contentType, start)
 		if appErr != nil {
 			level.Warn(sl.l).Log("msg", "append failed", "err", appErr)
@@ -1016,6 +1016,7 @@ mainLoop:
 			return
 		case <-sl.ctx.Done():
 			break mainLoop
+		// 等待断续器运行
 		case <-ticker.C:
 		}
 	}

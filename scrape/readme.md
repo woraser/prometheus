@@ -1,5 +1,5 @@
 ### 数据采集
-
+    
 
 #### Manage
     
@@ -7,7 +7,16 @@
     ScrapePool是针对单个target的scrape管理器，target中discovery模块但targetGroup中获取。
     断续运行，通过http GET请求获取metric的原始数据，将数据写入数据缓冲区，执行持久化处理。    
     
+##### Keys
+
+1. run()
     
+    入口方法，在main.go中调用，启动manager。
+    
+2. reloader()
+    
+    核心方法，启动后台服务，根据传入的targetgroup变化及时跟新scrapePool。
+
 
 #### Target
 
@@ -46,9 +55,9 @@
 ### Scrape
 
 #### Description
-    为每一个target创建scrapepool，通过get请求采集数据，延迟写入appender中。
+    为每一个target创建scrapeloop，通过get请求采集数据，延迟写入appender中。
     reload方法会更新target。当targetgtoup发生变化时，manager.go中触发sync()方法。
-    
+    写入过程中用到了cache。
 
 #### Keys
 
@@ -62,15 +71,15 @@
 
 3. loop
 
-    启动关闭开关
+    单向启动器
     
 4. scrapeCache
 
-    scrape缓存    
+    scrape缓存，具体逻辑在storage模块中
     
-5. met
+5. scrapeLoop
+    每一个target的scrape管理器，实现了loop接口   
 
-    metric缩写
     
 
 
