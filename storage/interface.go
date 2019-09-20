@@ -54,13 +54,14 @@ type Queryable interface {
 }
 
 // Querier provides reading access to time series data.
-// 查询器提供对时间序列数据的读取访问。
+// 查询器，提供对时间序列数据的读取访问。
 type Querier interface {
 	// Select returns a set of series that matches the given label matchers.
 	// 返回符合查询要求的数据
 	Select(*SelectParams, ...*labels.Matcher) (SeriesSet, Warnings, error)
 
 	// LabelValues returns all potential values for a label name.
+	// 返回label的所有值
 	LabelValues(name string) ([]string, Warnings, error)
 
 	// LabelNames returns all the unique label names present in the block in sorted order.
@@ -82,7 +83,7 @@ type SelectParams struct {
 
 // QueryableFunc is an adapter to allow the use of ordinary functions as
 // Queryables. It follows the idea of http.HandlerFunc.
-// QueryableFunc是一个允许使用普通函数asQueryables的适配器。 它遵循http.HandlerFunc规则
+// QueryableFunc是一个允许使用普通函数的适配器。 它遵循http.HandlerFunc规则
 type QueryableFunc func(ctx context.Context, mint, maxt int64) (Querier, error)
 
 // Querier calls f() with the given parameters.
@@ -105,33 +106,33 @@ type Appender interface {
 }
 
 // SeriesSet contains a set of series.
-// 序列集合
+// 数据集合
 type SeriesSet interface {
-	Next() bool
-	At() Series
+	Next() bool	// 迭代
+	At() Series	// 当前值
 	Err() error
 }
 
 // Series represents a single time series.
-// 单个时间序列
+// 单个时间序列到key:value
 type Series interface {
 	// Labels returns the complete set of labels identifying the series.
 	Labels() labels.Labels
 
 	// Iterator returns a new iterator of the data of the series.
-	// 返回数据集
+	// 返回数据迭代器
 	Iterator() SeriesIterator
 }
 
 // SeriesIterator iterates over the data of a time series.
-// SeriesIterator迭代时间序列的数据
+// SeriesIterator 数据迭代器的接口定义
 type SeriesIterator interface {
 	// Seek advances the iterator forward to the value at or after
 	// the given timestamp.
-	// 给定时间戳进行定位
+	// 给定时间戳进行数据定位，类似
 	Seek(t int64) bool
 	// At returns the current timestamp/value pair.
-	// 当前的键值对
+	// 获得当前的键值对
 	At() (t int64, v float64)
 	// Next advances the iterator by one.
 	// 迭代器迭代到下一个

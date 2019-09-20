@@ -19,8 +19,8 @@ import (
 
 // BufferedSeriesIterator wraps an iterator with a look-back buffer.
 type BufferedSeriesIterator struct {
-	it    SeriesIterator
-	buf   *sampleRing
+	it    SeriesIterator	// 数据迭代器
+	buf   *sampleRing 	// 缓冲
 	delta int64
 
 	lastTime int64
@@ -79,6 +79,7 @@ func (b *BufferedSeriesIterator) Buffer() SeriesIterator {
 }
 
 // Seek advances the iterator to the element at time t or greater.
+// 定位到t时间点
 func (b *BufferedSeriesIterator) Seek(t int64) bool {
 	t0 := t - b.buf.delta
 
@@ -107,12 +108,14 @@ func (b *BufferedSeriesIterator) Seek(t int64) bool {
 }
 
 // Next advances the iterator to the next element.
+// 数据迭代
 func (b *BufferedSeriesIterator) Next() bool {
 	if !b.ok {
 		return false
 	}
 
 	// Add current element to buffer before advancing.
+	// 在迭代之前缓冲当前数据
 	b.buf.add(b.it.At())
 
 	b.ok = b.it.Next()
@@ -124,6 +127,7 @@ func (b *BufferedSeriesIterator) Next() bool {
 }
 
 // Values returns the current element of the iterator.
+// 返回当前值
 func (b *BufferedSeriesIterator) Values() (int64, float64) {
 	return b.it.At()
 }
@@ -142,8 +146,8 @@ type sampleRing struct {
 	delta int64
 
 	buf []sample // lookback buffer
-	i   int      // position of most recent element in ring buffer 最新元素的未知
-	f   int      // position of first element in ring buffer 第一个元素的未知
+	i   int      // position of most recent element in ring buffer 最新元素的位置
+	f   int      // position of first element in ring buffer 第一个元素的位置
 	l   int      // number of elements in buffer
 
 	it sampleRingIterator

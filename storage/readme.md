@@ -1,10 +1,11 @@
 ### 存储支持模块
 
-    定义存储接口的方法和结构体，所有实现接口的方法都能接入存储。
+    定义存储接口的方法和结构体,tsdb是一个具体的实现。
 
-1. MinBlockDuration
+1. MinBlockDuration/maxBlockDuration
 
-    block的最小生存时间
+    数据在内存中保留时间，最大和最小值默认是2h/36h，推荐26h。
+    
     
 2. interface.go 
 
@@ -40,4 +41,4 @@
     
 9. buffer.go
 
-    数据缓存,没理解，下次再补充
+    数据缓存,提供一些相关的方法。

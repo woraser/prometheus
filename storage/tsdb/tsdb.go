@@ -116,11 +116,11 @@ type adapter struct {
 type Options struct {
 	// The timestamp range of head blocks after which they get persisted.
 	// It's the minimum duration of any persisted block.
-	// 所有数据持久块的最小持续时间，也就是一个块存储多长时间内的数据 默认是2h
+	// 数据在内存中保留时间， 默认是2h
 	MinBlockDuration model.Duration
 
 	// The maximum timestamp range of compacted blocks.
-	// 压缩后的存储块存储的最大时间范围 一个压缩后的block能存储的数据范围
+	// 数据在内存中保留时间 默认36h
 	MaxBlockDuration model.Duration
 
 	// The maximum size of each WAL segment file.
@@ -128,7 +128,7 @@ type Options struct {
 	WALSegmentSize units.Base2Bytes
 
 	// Duration for how long to retain data.
-	// 数据在存储块的有效时间
+	// 数据在存储块的生存时间 最大是100y
 	RetentionDuration model.Duration
 
 	// Maximum number of bytes to be retained.

@@ -311,15 +311,15 @@ func main() {
 		}
 	}
 
-	{ // Max block size  settings. 存储块的最大持续时间设置
+	{ // Max block size  settings. 内存存储时间
 		if cfg.tsdb.MaxBlockDuration == 0 {
 			maxBlockDuration, err := model.ParseDuration("31d")
 			if err != nil {
 				panic(err)
 			}
 			// When the time retention is set and not too big use to define the max block duration.
-			// 设置时间保留时，不要定义太大的最大块持续时间。
-			// 存储快保留时间/10 < block的最大持续时间
+			// 设置时间保留时，不要定义太大的存储时间。
+			// 存储快保留时间/10 < block的最大生存时间
 			if cfg.tsdb.RetentionDuration != 0 && cfg.tsdb.RetentionDuration/10 < maxBlockDuration {
 				maxBlockDuration = cfg.tsdb.RetentionDuration / 10
 			}
@@ -705,7 +705,7 @@ func main() {
 					"AllowOverlappingBlocks", cfg.tsdb.AllowOverlappingBlocks,
 					"WALCompression", cfg.tsdb.WALCompression,
 				)
-				// MinBlockDuration 每一个block的最小持续时间
+				// MinBlockDuration ：内存数据持续时间
 				startTimeMargin := int64(2 * time.Duration(cfg.tsdb.MinBlockDuration).Seconds() * 1000)
 				localStorage.Set(db, startTimeMargin)
 				close(dbOpen)

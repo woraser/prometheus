@@ -48,7 +48,7 @@ func NewFanout(logger log.Logger, primary Storage, secondaries ...Storage) Stora
 }
 
 // StartTime implements the Storage interface.
-// 获取fanout中最早的时间戳(比较primary和secondaries获得)
+// 获取fanout中最早的时间戳(比较primary和secondaries获得)，fanout的记录开始时间
 func (f *fanout) StartTime() (int64, error) {
 	// StartTime of a fanout should be the earliest StartTime of all its storages,
 	// both primary and secondaries.
@@ -117,13 +117,14 @@ func (f *fanout) Appender() (Appender, error) {
 }
 
 // Close closes the storage and all its underlying resources.
+// 关闭存储和关联的资源
 func (f *fanout) Close() error {
 	if err := f.primary.Close(); err != nil {
 		return err
 	}
 
 	// TODO return multiple errors?
-	// 只返回最后一个错误，有问题，无法正确的定位错误
+	// 只返回最后一个错误，有问题无法正确的定位错误
 	var lastErr error
 	for _, storage := range f.secondaries {
 		if err := storage.Close(); err != nil {
@@ -135,6 +136,7 @@ func (f *fanout) Close() error {
 }
 
 // fanoutAppender implements Appender.
+// fanout写入器，一个合并写入器
 type fanoutAppender struct {
 	logger log.Logger
 
@@ -199,6 +201,7 @@ func (f *fanoutAppender) Rollback() (err error) {
 }
 
 // mergeQuerier implements Querier.
+// 合并的查询器
 type mergeQuerier struct {
 	primaryQuerier Querier
 	queriers       []Querier
@@ -219,6 +222,7 @@ func NewMergeQuerier(primaryQuerier Querier, queriers []Querier) Querier {
 	// 过滤queriers中的空查询器
 	for _, querier := range queriers {
 		// NoopQuerier 空查询器
+		// 判断是否是空查询器
 		if querier != NoopQuerier() {
 			filtered = append(filtered, querier)
 		}
@@ -243,13 +247,13 @@ func NewMergeQuerier(primaryQuerier Querier, queriers []Querier) Querier {
 }
 
 // Select returns a set of series that matches the given label matchers.
-// 返回符合指定label的series
+// 返回符合指定label的数据集合
 // Core function
 func (q *mergeQuerier) Select(params *SelectParams, matchers ...*labels.Matcher) (SeriesSet, Warnings, error) {
 	seriesSets := make([]SeriesSet, 0, len(q.queriers))
 	var warnings Warnings
 	for _, querier := range q.queriers {
-		// 从每一个查询器中获取查询结果
+		// 遍历每一个查询器执行查询操作
 		set, wrn, err := querier.Select(params, matchers...)
 		// {query set:querier}
 		q.setQuerierMap[set] = querier
@@ -258,6 +262,7 @@ func (q *mergeQuerier) Select(params *SelectParams, matchers ...*labels.Matcher)
 			warnings = append(warnings, wrn...)
 		}
 		if err != nil {
+			// 记录失败的querier
 			q.failedQueriers[querier] = struct{}{}
 			// If the error source isn't the primary querier, return the error as a warning and continue.
 			if querier != q.primaryQuerier {
@@ -267,17 +272,19 @@ func (q *mergeQuerier) Select(params *SelectParams, matchers ...*labels.Matcher)
 				return nil, nil, err
 			}
 		}
-		// 结果集
+		// 结果集合并
 		seriesSets = append(seriesSets, set)
 	}
 	return NewMergeSeriesSet(seriesSets, q), warnings, nil
 }
 
 // LabelValues returns all potential values for a label name.
+// 返回指定label的数据
 func (q *mergeQuerier) LabelValues(name string) ([]string, Warnings, error) {
 	var results [][]string
 	var warnings Warnings
 	for _, querier := range q.queriers {
+		// 获取查询结果
 		values, wrn, err := querier.LabelValues(name)
 
 		if wrn != nil {
@@ -297,7 +304,7 @@ func (q *mergeQuerier) LabelValues(name string) ([]string, Warnings, error) {
 	}
 	return mergeStringSlices(results), warnings, nil
 }
-
+// 判断是否是失败的查询器
 func (q *mergeQuerier) IsFailedSet(set SeriesSet) bool {
 	_, isFailedQuerier := q.failedQueriers[q.setQuerierMap[set]]
 	return isFailedQuerier
@@ -319,7 +326,7 @@ func mergeStringSlices(ss [][]string) []string {
 		)
 	}
 }
-
+// 合并两个slices
 func mergeTwoStringSlices(a, b []string) []string {
 	i, j := 0, 0
 	result := make([]string, 0, len(a)+len(b))
@@ -343,7 +350,7 @@ func mergeTwoStringSlices(a, b []string) []string {
 }
 
 // LabelNames returns all the unique label names present in the block in sorted order.
-// 返回block中的所有唯一label
+// 返回所有唯一label
 func (q *mergeQuerier) LabelNames() ([]string, Warnings, error) {
 	labelNamesMap := make(map[string]struct{})
 	var warnings Warnings
@@ -390,6 +397,7 @@ func (q *mergeQuerier) Close() error {
 }
 
 // mergeSeriesSet implements SeriesSet
+// 合并的数据集合
 type mergeSeriesSet struct {
 	currentLabels labels.Labels
 	currentSets   []SeriesSet
@@ -410,9 +418,11 @@ func NewMergeSeriesSet(sets []SeriesSet, querier *mergeQuerier) SeriesSet {
 	// series under the cursor.
 	var h seriesSetHeap
 	for _, set := range sets {
+		// 判断set是否有数据，将有效的set存入heap中
 		if set == nil {
 			continue
 		}
+		// set有多个数据
 		if set.Next() {
 			heap.Push(&h, set)
 		}
