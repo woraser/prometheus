@@ -235,6 +235,7 @@ func NewQueueManager(logger log.Logger, walDir string, samplesIn *ewmaRate, cfg 
 // enqueued on their shards or a shutdown signal is received.
 // 在队列中添加要发送到远程存储的样本。
 // 阻塞知道所有样本在其分片上排队或接收到关闭信号。
+// 通过enqueue()方法发送到关联队列
 func (t *QueueManager) Append(samples []tsdb.RefSample) bool {
 outer:
 	for _, s := range samples {
@@ -348,6 +349,7 @@ func (t *QueueManager) Stop() {
 }
 
 // StoreSeries keeps track of which series we know about for lookups when sending samples to remote.
+// 将wal监听器拿到到数据写入队列中
 func (t *QueueManager) StoreSeries(series []tsdb.RefSeries, index int) {
 	for _, s := range series {
 		ls := processExternalLabels(s.Labels, t.externalLabels)
@@ -644,6 +646,7 @@ func (s *shards) stop() {
 
 // enqueue a sample.  If we are currently in the process of shutting down or resharding,
 // will return false; in this case, you should back off and retry.
+// 队列中传入一个数据，出错重试
 func (s *shards) enqueue(ref uint64, sample sample) bool {
 	s.mtx.RLock()
 	defer s.mtx.RUnlock()
@@ -653,11 +656,12 @@ func (s *shards) enqueue(ref uint64, sample sample) bool {
 		return false
 	default:
 	}
-
+	// 计算发送队列的编号
 	shard := uint64(ref) % uint64(len(s.queues))
 	select {
 	case <-s.softShutdown:
 		return false
+	// 数据发送
 	case s.queues[shard] <- sample:
 		return true
 	}

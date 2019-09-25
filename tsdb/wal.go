@@ -112,6 +112,7 @@ type RefSeries struct {
 }
 
 // RefSample is a timestamp/value pair associated with a reference to a series.
+// Ref引用
 type RefSample struct {
 	Ref uint64
 	T   int64

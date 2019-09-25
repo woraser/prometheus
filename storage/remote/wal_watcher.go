@@ -450,7 +450,7 @@ func (w *WALWatcher) garbageCollectSeries(segmentNum int) error {
 	return nil
 }
 
-// 读取实时文件流
+// 读取实时文件流，将数据发送到关联队列中
 func (w *WALWatcher) readSegment(r *wal.LiveReader, segmentNum int, tail bool) error {
 	var (
 		dec     tsdb.RecordDecoder
