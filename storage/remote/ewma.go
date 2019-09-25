@@ -20,6 +20,7 @@ import (
 )
 
 // ewmaRate tracks an exponentially weighted moving average of a per-second rate.
+// ewmaRate跟踪每秒速率的指数加权移动平均值。
 type ewmaRate struct {
 	newEvents int64
 	alpha     float64
@@ -31,6 +32,7 @@ type ewmaRate struct {
 
 // newEWMARate always allocates a new ewmaRate, as this guarantees the atomically
 // accessed int64 will be aligned on ARM.  See prometheus#2666.
+//  newEWMARate总是分配一个新的ewmaRate，因为这可以保证原子访问的int64将在ARM上对齐
 func newEWMARate(alpha float64, interval time.Duration) *ewmaRate {
 	return &ewmaRate{
 		alpha:    alpha,
@@ -38,7 +40,8 @@ func newEWMARate(alpha float64, interval time.Duration) *ewmaRate {
 	}
 }
 
-// rate returns the per-second rate.
+// rate returns the per-second rate
+// 获取每秒速率
 func (r *ewmaRate) rate() float64 {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
@@ -46,6 +49,7 @@ func (r *ewmaRate) rate() float64 {
 }
 
 // tick assumes to be called every r.interval.
+// 每个r.interval都被调用。
 func (r *ewmaRate) tick() {
 	newEvents := atomic.SwapInt64(&r.newEvents, 0)
 	instantRate := float64(newEvents) / r.interval.Seconds()

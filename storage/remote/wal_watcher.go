@@ -95,6 +95,7 @@ type writeTo interface {
 }
 
 // WALWatcher watches the TSDB WAL for a given WriteTo.
+// TSDB WAL 文件的观察者
 type WALWatcher struct {
 	name           string
 	writer         writeTo
@@ -123,11 +124,11 @@ func NewWALWatcher(logger log.Logger, name string, writer writeTo, walDir string
 	}
 	return &WALWatcher{
 		logger: logger,
-		writer: writer,
-		walDir: path.Join(walDir, "wal"),
+		writer: writer,	// 写入目标
+		walDir: path.Join(walDir, "wal"),	// wal文件地址
 		name:   name,
-		quit:   make(chan struct{}),
-		done:   make(chan struct{}),
+		quit:   make(chan struct{}),	// 中断信号
+		done:   make(chan struct{}),	// 停止信号
 
 		maxSegment: -1,
 	}
@@ -144,7 +145,9 @@ func (w *WALWatcher) setMetrics() {
 }
 
 // Start the WALWatcher.
+// 启动wal监听
 func (w *WALWatcher) Start() {
+	// 设置初始化的metric
 	w.setMetrics()
 	level.Info(w.logger).Log("msg", "starting WAL watcher", "queue", w.name)
 
@@ -152,6 +155,7 @@ func (w *WALWatcher) Start() {
 }
 
 // Stop the WALWatcher.
+// 关闭监听器
 func (w *WALWatcher) Stop() {
 	close(w.quit)
 	<-w.done
@@ -165,13 +169,17 @@ func (w *WALWatcher) Stop() {
 
 	level.Info(w.logger).Log("msg", "WAL watcher stopped", "queue", w.name)
 }
-
+// 启动监听器
 func (w *WALWatcher) loop() {
 	defer close(w.done)
 
 	// We may encounter failures processing the WAL; we should wait and retry.
+	// 我们可能会遇到处理WAL的失败; 我们应该等待并重试。
+	// 5S运行一次具体的监听事件
 	for !isClosed(w.quit) {
 		w.startTime = timestamp.FromTime(time.Now())
+		// tailing WAL 运行
+		// tail -f xxx.wal
 		if err := w.run(); err != nil {
 			level.Error(w.logger).Log("msg", "error tailing WAL", "err", err)
 		}
@@ -183,14 +191,19 @@ func (w *WALWatcher) loop() {
 		}
 	}
 }
-
+// 真正的wal监听事件 core function
 func (w *WALWatcher) run() error {
+	// 获得wal文件首尾位置
 	_, lastSegment, err := w.firstAndLast()
 	if err != nil {
 		return errors.Wrap(err, "wal.Segments")
 	}
 
 	// Backfill from the checkpoint first if it exists.
+	// 从检查点回填是否存在（如果存在），检查上次的读取记录。
+	// 返回最近一次读取的文件名称和索引
+	// lastCheckpoint 上次读取文件名称
+	// checkpointIndex 上次读取文件位置
 	lastCheckpoint, checkpointIndex, err := tsdb.LastCheckpoint(w.walDir)
 	if err != nil && err != tsdb.ErrNotFound {
 		return errors.Wrap(err, "tsdb.LastCheckpoint")
@@ -201,8 +214,10 @@ func (w *WALWatcher) run() error {
 			return errors.Wrap(err, "readCheckpoint")
 		}
 	}
+	// 上次读取的文件名称
 	w.lastCheckpoint = lastCheckpoint
-
+	// 根据上次读取记录获得当前需要读取的位置
+	// currentSegment 当前实时读取对象
 	currentSegment, err := w.findSegmentForIndex(checkpointIndex)
 	if err != nil {
 		return err
@@ -210,16 +225,21 @@ func (w *WALWatcher) run() error {
 
 	level.Debug(w.logger).Log("msg", "tailing WAL", "lastCheckpoint", lastCheckpoint, "checkpointIndex", checkpointIndex, "currentSegment", currentSegment, "lastSegment", lastSegment)
 	for !isClosed(w.quit) {
+		// 依次读取文件，直到出错或者没有下一个文件为止
+		// 设置当前读取位置的metric
 		w.currentSegmentMetric.Set(float64(currentSegment))
 		level.Debug(w.logger).Log("msg", "processing segment", "currentSegment", currentSegment)
 
 		// On start, after reading the existing WAL for series records, we have a pointer to what is the latest segment.
 		// On subsequent calls to this function, currentSegment will have been incremented and we should open that segment.
+		//首先，在读取现有的系列记录的WAL之后，我们需要有一个指向最新段的指针。
+		//在此函数的后续调用中，currentSegment将增加，我们应该打开该段。
 		if err := w.watch(currentSegment, currentSegment >= lastSegment); err != nil {
 			return err
 		}
 
 		// For testing: stop when you hit a specific segment.
+		// 读取的文件已经是最后一个，直接返回
 		if currentSegment == w.maxSegment {
 			return nil
 		}
@@ -231,6 +251,7 @@ func (w *WALWatcher) run() error {
 }
 
 // findSegmentForIndex finds the first segment greater than or equal to index.
+// 查找大于或等于索引的第一段。
 func (w *WALWatcher) findSegmentForIndex(index int) (int, error) {
 	refs, err := w.segments(w.walDir)
 	if err != nil {
@@ -245,7 +266,7 @@ func (w *WALWatcher) findSegmentForIndex(index int) (int, error) {
 
 	return -1, errors.New("failed to find segment for index")
 }
-
+// 获取文件目录的首位
 func (w *WALWatcher) firstAndLast() (int, int, error) {
 	refs, err := w.segments(w.walDir)
 	if err != nil {
@@ -260,7 +281,10 @@ func (w *WALWatcher) firstAndLast() (int, int, error) {
 
 // Copied from tsdb/wal/wal.go so we do not have to open a WAL.
 // Plan is to move WAL watcher to TSDB and dedupe these implementations.
+// 从tsdb / wal / wal.go复制文件，所以我们不必打开WAL。
+// 计划是将WAL观察者移动到TSDB并重复删除这些实现。
 func (w *WALWatcher) segments(dir string) ([]int, error) {
+	// 文件夹读取
 	files, err := fileutil.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -274,6 +298,7 @@ func (w *WALWatcher) segments(dir string) ([]int, error) {
 			continue
 		}
 		if len(refs) > 0 && k > last+1 {
+			// segments无序错误
 			return nil, errors.New("segments are not sequential")
 		}
 		refs = append(refs, k)
@@ -287,31 +312,40 @@ func (w *WALWatcher) segments(dir string) ([]int, error) {
 // Use tail true to indicate that the reader is currently on a segment that is
 // actively being written to. If false, assume it's a full segment and we're
 // replaying it on start to cache the series records.
+// core function
+// 使用tail来表示文件是否正在被写入，如果是true，代表文件正在被写入，如果是false，代表是一个完整的文件对象
+// segmentNum:实时文件流 编号
 func (w *WALWatcher) watch(segmentNum int, tail bool) error {
+	// 根据文件编号和索引地址打开指定的读取文件
 	segment, err := wal.OpenReadSegment(wal.SegmentName(w.walDir, segmentNum))
 	if err != nil {
 		return err
 	}
 	defer segment.Close()
-
+	// 打开一个新的文件的实时读取
 	reader := wal.NewLiveReader(w.logger, liveReaderMetrics, segment)
-
+	// 定时读取 10ms
 	readTicker := time.NewTicker(readPeriod)
 	defer readTicker.Stop()
-
+	// 5s 文件校验
 	checkpointTicker := time.NewTicker(checkpointPeriod)
 	defer checkpointTicker.Stop()
-
+	// 100ms 读取对象校验
 	segmentTicker := time.NewTicker(segmentCheckPeriod)
 	defer segmentTicker.Stop()
 
 	// If we're replaying the segment we need to know the size of the file to know
 	// when to return from watch and move on to the next segment.
+	// 如果要重放段，则需要知道文件的大小
+	// 何时从监控返回并移至下一段。
+	// int64 最大值
 	size := int64(math.MaxInt64)
+	// ！tail 这是一个完整的文件对象 不需要做任何校验，正常读取就行了
 	if !tail {
 		segmentTicker.Stop()
 		checkpointTicker.Stop()
 		var err error
+		// 获取文件未读取部分的大小
 		size, err = getSegmentSize(w.walDir, segmentNum)
 		if err != nil {
 			return errors.Wrap(err, "getSegmentSize")
@@ -332,6 +366,7 @@ func (w *WALWatcher) watch(segmentNum int, tail bool) error {
 			}
 
 		case <-segmentTicker.C:
+			// 获得首尾
 			_, last, err := w.firstAndLast()
 			if err != nil {
 				return errors.Wrap(err, "segments")
@@ -341,10 +376,10 @@ func (w *WALWatcher) watch(segmentNum int, tail bool) error {
 			if last <= segmentNum {
 				continue
 			}
-
+			// 读取实时文件流
 			err = w.readSegment(reader, segmentNum, tail)
 
-			// Ignore errors reading to end of segment whilst replaying the WAL.
+			// Ignore errorgarbages reading to end of segment whilst replaying the WAL.
 			if !tail {
 				if err != nil && err != io.EOF {
 					level.Warn(w.logger).Log("msg", "ignoring error reading to end of segment, may have dropped data", "err", err)
@@ -362,6 +397,7 @@ func (w *WALWatcher) watch(segmentNum int, tail bool) error {
 			return nil
 
 		case <-readTicker.C:
+			// 读取实时文件流
 			err = w.readSegment(reader, segmentNum, tail)
 
 			// Ignore all errors reading to end of segment whilst replaying the WAL.
@@ -414,6 +450,7 @@ func (w *WALWatcher) garbageCollectSeries(segmentNum int) error {
 	return nil
 }
 
+// 读取实时文件流
 func (w *WALWatcher) readSegment(r *wal.LiveReader, segmentNum int, tail bool) error {
 	var (
 		dec     tsdb.RecordDecoder
@@ -541,6 +578,7 @@ func checkpointNum(dir string) (int, error) {
 }
 
 // Get size of segment.
+// 获取读取对象大小
 func getSegmentSize(dir string, index int) (int64, error) {
 	i := int64(-1)
 	fi, err := os.Stat(wal.SegmentName(dir, index))

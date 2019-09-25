@@ -114,8 +114,8 @@ func main() {
 		webTimeout          model.Duration
 		queryTimeout        model.Duration
 		queryConcurrency    int	// 查询并发数
-		queryMaxSamples     int
-		RemoteFlushDeadline model.Duration //原创刷新
+		queryMaxSamples     int	// 查询时允许的最大sample数量
+		RemoteFlushDeadline model.Duration // 在关机或配置重新加载时等待刷新样本的时间
 
 		prometheusURL   string
 		corsRegexString string

@@ -73,6 +73,7 @@ func (p *page) reset() {
 }
 
 // Segment represents a segment file.
+// 代表文件对象
 type Segment struct {
 	*os.File
 	dir string

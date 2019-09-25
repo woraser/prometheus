@@ -44,8 +44,9 @@ const (
 
 	// We track samples in/out and how long pushes take using an Exponentially
 	// Weighted Moving Average.
-	ewmaWeight          = 0.2
-	shardUpdateDuration = 10 * time.Second
+	// 我们使用指数加权移动平均线跟踪样本的进/出和推进的时间。
+	ewmaWeight          = 0.2	// 权重
+	shardUpdateDuration = 10 * time.Second	// 更新时间
 
 	// Allow 30% too many shards before scaling down.
 	shardToleranceFraction = 0.3
@@ -157,6 +158,7 @@ type StorageClient interface {
 // QueueManager manages a queue of samples to be sent to the Storage
 // indicated by the provided StorageClient. Implements writeTo interface
 // used by WAL Watcher.
+// QueueManager是一个队列管理器，负责向远程存储写入数据，通过WAL Watcher写入。
 type QueueManager struct {
 	logger         log.Logger
 	flushDeadline  time.Duration
@@ -193,6 +195,7 @@ type QueueManager struct {
 }
 
 // NewQueueManager builds a new QueueManager.
+// 创建队列管理器
 func NewQueueManager(logger log.Logger, walDir string, samplesIn *ewmaRate, cfg config.QueueConfig, externalLabels labels.Labels, relabelConfigs []*relabel.Config, client StorageClient, flushDeadline time.Duration) *QueueManager {
 	if logger == nil {
 		logger = log.NewNopLogger()
@@ -230,6 +233,8 @@ func NewQueueManager(logger log.Logger, walDir string, samplesIn *ewmaRate, cfg 
 
 // Append queues a sample to be sent to the remote storage. Blocks until all samples are
 // enqueued on their shards or a shutdown signal is received.
+// 在队列中添加要发送到远程存储的样本。
+// 阻塞知道所有样本在其分片上排队或接收到关闭信号。
 func (t *QueueManager) Append(samples []tsdb.RefSample) bool {
 outer:
 	for _, s := range samples {
@@ -272,6 +277,7 @@ outer:
 
 // Start the queue manager sending samples to the remote storage.
 // Does not block.
+// 启动
 func (t *QueueManager) Start() {
 	t.startedAt = time.Now()
 
@@ -295,12 +301,16 @@ func (t *QueueManager) Start() {
 	// Initialise some metrics.
 	t.shardCapacity.Set(float64(t.cfg.Capacity))
 	t.pendingSamplesMetric.Set(0)
-
+	// 启动数据队列
+	// TODO shards=缓冲数据队列？这命名！！！
 	t.shards.start(t.numShards)
+	// 启动wal文件监听服务
 	t.watcher.Start()
 
 	t.wg.Add(2)
+	// 实时更新shards队列数量，以达到最优写入策略
 	go t.updateShardsLoop()
+	// 更新shard，先删除原有shard,再启动新的shard,避免重复
 	go t.reshardLoop()
 }
 
@@ -315,6 +325,7 @@ func (t *QueueManager) Stop() {
 	// Wait for all QueueManager routines to end before stopping shards and WAL watcher. This
 	// is to ensure we don't end up executing a reshard and shards.stop() at the same time, which
 	// causes a closed channel panic.
+	// 依次关闭服务，避免出现channle 问题，因为服务之间存在依赖关系。
 	t.shards.stop()
 	t.watcher.Stop()
 
@@ -462,6 +473,7 @@ func (t *QueueManager) calculateDesiredShards() {
 	// We use an integral accumulator, like in a PID, to help dampen
 	// oscillation. The accumulator will correct for any errors not accounted
 	// for in the desired shard calculation by adjusting for pending samples.
+	// 计算基数
 	const integralGain = 0.2
 	// Initialise the integral accumulator as the average rate of samples
 	// pending. This accounts for pending samples that were created while the
@@ -470,10 +482,12 @@ func (t *QueueManager) calculateDesiredShards() {
 		elapsed := time.Since(t.startedAt) / time.Second
 		t.integralAccumulator = integralGain * samplesPending / float64(elapsed)
 	}
+	// integralAccumulator + = 平均采样率 * 基数
 	t.integralAccumulator += samplesPendingRate * integralGain
 
 	var (
 		timePerSample = samplesOutDuration / samplesOutRate
+		// 期望队列数量 = 每次发送数量 * (采样率 + )
 		desiredShards = timePerSample * (samplesInRate + t.integralAccumulator)
 	)
 	level.Debug(t.logger).Log("msg", "QueueManager.calculateDesiredShards",
@@ -573,12 +587,14 @@ type shards struct {
 }
 
 // start the shards; must be called before any call to enqueue.
+// 启动数据队列
 func (s *shards) start(n int) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
-
+	// sample队列，sample是存储数据
 	newQueues := make([]chan sample, n)
 	for i := 0; i < n; i++ {
+		// 设置队列容量
 		newQueues[i] = make(chan sample, s.qm.cfg.Capacity)
 	}
 
@@ -590,6 +606,7 @@ func (s *shards) start(n int) {
 	s.running = int32(n)
 	s.done = make(chan struct{})
 	for i := 0; i < n; i++ {
+		// 运行所有的数据队列
 		go s.runShard(hardShutdownCtx, i, newQueues[i])
 	}
 	s.qm.numShardsMetric.Set(float64(n))
@@ -645,26 +662,27 @@ func (s *shards) enqueue(ref uint64, sample sample) bool {
 		return true
 	}
 }
-
+// 运行数据队列
 func (s *shards) runShard(ctx context.Context, shardID int, queue chan sample) {
 	defer func() {
 		if atomic.AddInt32(&s.running, -1) == 0 {
 			close(s.done)
 		}
 	}()
-
+	// 数据缓冲队列id=shardID
 	shardNum := strconv.Itoa(shardID)
 
 	// Send batches of at most MaxSamplesPerSend samples to the remote storage.
 	// If we have fewer samples than that, flush them out after a deadline
 	// anyways.
+	// 每次根据配置的最大发送量批量发送，或者到截止时间发送
 	var (
-		max            = s.qm.cfg.MaxSamplesPerSend
-		nPending       = 0
-		pendingSamples = allocateTimeSeries(max)
-		buf            []byte
+		max            = s.qm.cfg.MaxSamplesPerSend	// 发送数据最大值
+		nPending       = 0 // 需要发送的数据
+		pendingSamples = allocateTimeSeries(max)	// 预分配空间
+		buf            []byte	// 字节池
 	)
-
+	// 数据最大保留时间，到点就发送数据，无论数量大小
 	timer := time.NewTimer(time.Duration(s.qm.cfg.BatchSendDeadline))
 	stop := func() {
 		if !timer.Stop() {
@@ -675,13 +693,14 @@ func (s *shards) runShard(ctx context.Context, shardID int, queue chan sample) {
 		}
 	}
 	defer stop()
-
+	// 后台服务
 	for {
 		select {
 		case <-ctx.Done():
 			return
 
 		case sample, ok := <-queue:
+			// 若queue队列被关闭，若nPending>0,代表还有数据需要发送。
 			if !ok {
 				if nPending > 0 {
 					level.Debug(s.qm.logger).Log("msg", "Flushing samples to remote storage...", "count", nPending)
@@ -695,21 +714,26 @@ func (s *shards) runShard(ctx context.Context, shardID int, queue chan sample) {
 			// Number of pending samples is limited by the fact that sendSamples (via sendSamplesWithBackoff)
 			// retries endlessly, so once we reach max samples, if we can never send to the endpoint we'll
 			// stop reading from the queue. This makes it safe to reference pendingSamples by index.
+			// 待发样本的数量受到sendSamples（通过sendSamplesWithBackoff）无休止地重试这一事实的限制，
+			// 因此一旦我们达到最大样本，如果我们永远不能发送到端点，我们将停止从队列中读取。
+			// 这样可以安全地通过索引引用pendingSamples
 			pendingSamples[nPending].Labels = labelsToLabelsProto(sample.labels, pendingSamples[nPending].Labels)
 			pendingSamples[nPending].Samples[0].Timestamp = sample.t
 			pendingSamples[nPending].Samples[0].Value = sample.v
 			nPending++
 			s.qm.pendingSamplesMetric.Inc()
-
+			// 待发送数据>设定值，执行发送操作
 			if nPending >= max {
 				s.sendSamples(ctx, pendingSamples, &buf)
+				// 重制nPending
 				nPending = 0
 				s.qm.pendingSamplesMetric.Sub(float64(max))
-
+				// TODO 未理解，检验截止时间机制是否生效？
 				stop()
+				// 重置发送的截止时间
 				timer.Reset(time.Duration(s.qm.cfg.BatchSendDeadline))
 			}
-
+		// 到达截止时间，直接发送数据
 		case <-timer.C:
 			if nPending > 0 {
 				level.Debug(s.qm.logger).Log("msg", "runShard timer ticked, sending samples", "samples", nPending, "shard", shardNum)
@@ -721,9 +745,10 @@ func (s *shards) runShard(ctx context.Context, shardID int, queue chan sample) {
 		}
 	}
 }
-
+// 批量发送数据
 func (s *shards) sendSamples(ctx context.Context, samples []prompb.TimeSeries, buf *[]byte) {
 	begin := time.Now()
+	// sendSamplesWithBackoff：发送数据，出错重试需要进行等待
 	err := s.sendSamplesWithBackoff(ctx, samples, buf)
 	if err != nil {
 		level.Error(s.qm.logger).Log("msg", "non-recoverable error", "count", len(samples), "err", err)
@@ -732,21 +757,25 @@ func (s *shards) sendSamples(ctx context.Context, samples []prompb.TimeSeries, b
 
 	// These counters are used to calculate the dynamic sharding, and as such
 	// should be maintained irrespective of success or failure.
+	// 发送数据数量统计和时间统计，用于更改发送速率？
 	s.qm.samplesOut.incr(int64(len(samples)))
 	s.qm.samplesOutDuration.incr(int64(time.Since(begin)))
 }
 
 // sendSamples to the remote storage with backoff for recoverable errors.
 func (s *shards) sendSamplesWithBackoff(ctx context.Context, samples []prompb.TimeSeries, buf *[]byte) error {
+	// s.qm.cfg.MinBackoff：重试的最小等待时间
 	backoff := s.qm.cfg.MinBackoff
+	// 写入请求 highest=数据中的最大时间戳
 	req, highest, err := buildWriteRequest(samples, *buf)
 	*buf = req
 	if err != nil {
 		// Failing to build the write request is non-recoverable, since it will
 		// only error if marshaling the proto to bytes fails.
+		// 构建写入请求是不可恢复的，因为它只有在将原型转为字节时才会出错
 		return err
 	}
-
+	// 循环处理
 	for {
 		select {
 		case <-ctx.Done():
@@ -754,34 +783,40 @@ func (s *shards) sendSamplesWithBackoff(ctx context.Context, samples []prompb.Ti
 		default:
 		}
 		begin := time.Now()
+		// 将数据保存到远程存储
 		err := s.qm.client.Store(ctx, req)
-
+		// 记录这次存储时间
 		s.qm.sentBatchDuration.Observe(time.Since(begin).Seconds())
-
+		// 如果没出错，记录操作元数据，结束循环
 		if err == nil {
 			s.qm.succeededSamplesTotal.Add(float64(len(samples)))
 			s.qm.highestSentTimestampMetric.Set(float64(highest / 1000))
 			return nil
 		}
-
+		// 若错误不是可回复错误，直接返回当前错误
 		if _, ok := err.(recoverableError); !ok {
 			return err
 		}
+		// 进行数据重推
 		s.qm.retriedSamplesTotal.Add(float64(len(samples)))
 		level.Debug(s.qm.logger).Log("msg", "failed to send batch, retrying", "err", err)
-
+		// 时间中断
 		time.Sleep(time.Duration(backoff))
+		// 每次重推 等待时间 * 2
 		backoff = backoff * 2
+		// 等待时间>设置的最大时间，还是继续无限重推
 		if backoff > s.qm.cfg.MaxBackoff {
 			backoff = s.qm.cfg.MaxBackoff
 		}
 	}
 }
-
+// 构建写入请求
 func buildWriteRequest(samples []prompb.TimeSeries, buf []byte) ([]byte, int64, error) {
+	// highest 数据中的最大时间戳
 	var highest int64
 	for _, ts := range samples {
 		// At the moment we only ever append a TimeSeries with a single sample in it.
+		// ProtoBuf 格式
 		if ts.Samples[0].Timestamp > highest {
 			highest = ts.Samples[0].Timestamp
 		}
@@ -789,7 +824,7 @@ func buildWriteRequest(samples []prompb.TimeSeries, buf []byte) ([]byte, int64, 
 	req := &prompb.WriteRequest{
 		Timeseries: samples,
 	}
-
+	// 数据转换
 	data, err := proto.Marshal(req)
 	if err != nil {
 		return nil, highest, err
@@ -797,13 +832,15 @@ func buildWriteRequest(samples []prompb.TimeSeries, buf []byte) ([]byte, int64, 
 
 	// snappy uses len() to see if it needs to allocate a new slice. Make the
 	// buffer as long as possible.
+	// buf分配空间
 	if buf != nil {
 		buf = buf[0:cap(buf)]
 	}
+	// 获取Encode之后的压缩数据
 	compressed := snappy.Encode(buf, data)
 	return compressed, highest, nil
 }
-
+// 预分配数据空间
 func allocateTimeSeries(capacity int) []prompb.TimeSeries {
 	timeseries := make([]prompb.TimeSeries, capacity)
 	// We only ever send one sample per timeseries, so preallocate with length one.

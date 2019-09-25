@@ -59,6 +59,8 @@ func NewLiveReader(logger log.Logger, metrics *liveReaderMetrics, r io.Reader) *
 
 		// Until we understand how they come about, make readers permissive
 		// to records spanning pages.
+		// 在了解它们的产生方式之前，先让读者放任
+		// 记录跨页。
 		permissive: true,
 	}
 
@@ -68,6 +70,7 @@ func NewLiveReader(logger log.Logger, metrics *liveReaderMetrics, r io.Reader) *
 // LiveReader reads WAL records from an io.Reader. It allows reading of WALs
 // that are still in the process of being written, and returns records as soon
 // as they can be read.
+// 实时读取文件
 type LiveReader struct {
 	logger     log.Logger
 	rdr        io.Reader
