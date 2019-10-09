@@ -38,7 +38,7 @@ import (
 	"github.com/prometheus/prometheus/tsdb/labels"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
-
+// 核心函数
 func main() {
 	if err := execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -70,6 +70,7 @@ func execute() (err error) {
 	)
 
 	logger := log.NewLogfmtLogger(log.NewSyncWriter(os.Stderr))
+	// 错误集合
 	var merr tsdb_errors.MultiError
 
 	switch kingpin.MustParse(cli.Parse(os.Args[1:])) {
@@ -139,7 +140,7 @@ func execute() (err error) {
 	}
 	return nil
 }
-
+// 写入器
 type writeBenchmark struct {
 	outPath     string
 	samplesFile string

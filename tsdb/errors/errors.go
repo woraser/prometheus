@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 )
+// 异常处理类
 
 // The MultiError type implements the error interface, and contains the
 // Errors used to construct it.

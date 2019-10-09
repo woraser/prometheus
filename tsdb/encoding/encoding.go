@@ -21,7 +21,7 @@ import (
 
 	"github.com/pkg/errors"
 )
-
+// 序列化处理
 var (
 	ErrInvalidSize     = errors.New("invalid size")
 	ErrInvalidChecksum = errors.New("invalid checksum")
