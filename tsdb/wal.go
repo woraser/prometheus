@@ -1240,6 +1240,7 @@ func deprecatedWALExists(logger log.Logger, dir string) (bool, error) {
 }
 
 // MigrateWAL rewrites the deprecated write ahead log into the new format.
+// 将已弃用的预写日志重写为新格式
 func MigrateWAL(logger log.Logger, dir string) (err error) {
 	if logger == nil {
 		logger = log.NewNopLogger()
@@ -1248,7 +1249,7 @@ func MigrateWAL(logger log.Logger, dir string) (err error) {
 		return err
 	}
 	level.Info(logger).Log("msg", "migrating WAL format")
-
+	// 删除临时文件
 	tmpdir := dir + ".tmp"
 	if err := os.RemoveAll(tmpdir); err != nil {
 		return errors.Wrap(err, "cleanup replacement dir")
@@ -1265,7 +1266,7 @@ func MigrateWAL(logger log.Logger, dir string) (err error) {
 			repl.Close()
 		}
 	}()
-
+	// 打开wal文件
 	w, err := OpenSegmentWAL(dir, logger, time.Minute, nil)
 	if err != nil {
 		return errors.Wrap(err, "open old WAL")
@@ -1278,6 +1279,8 @@ func MigrateWAL(logger log.Logger, dir string) (err error) {
 		enc RecordEncoder
 		b   []byte
 	)
+	// 从wal中读取数据
+	// 同时repl记录这些数据
 	decErr := rdr.Read(
 		func(s []RefSeries) {
 			if err != nil {
@@ -1298,6 +1301,7 @@ func MigrateWAL(logger log.Logger, dir string) (err error) {
 			err = repl.Log(enc.Tombstones(s, b[:0]))
 		},
 	)
+	// 错误处理和关闭i/o
 	if decErr != nil {
 		return errors.Wrap(err, "decode old entries")
 	}

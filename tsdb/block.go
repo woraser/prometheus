@@ -63,6 +63,7 @@ type IndexWriter interface {
 }
 
 // IndexReader provides reading access of serialized index data.
+// IndexReader是block中的index读取器，Symbols返回一组可能出现在系列标签和索引中的字符串符号。
 type IndexReader interface {
 	// Symbols returns a set of string symbols that may occur in series' labels
 	// and indices.
@@ -75,6 +76,7 @@ type IndexReader interface {
 	// The Postings here contain the offsets to the series inside the index.
 	// Found IDs are not strictly required to point to a valid Series, e.g. during
 	// background garbage collections.
+	// TODO？
 	Postings(name, value string) (index.Postings, error)
 
 	// SortedPostings returns a postings list that is reordered to be sorted
@@ -204,6 +206,7 @@ const metaFilename = "meta.json"
 
 func chunkDir(dir string) string { return filepath.Join(dir, "chunks") }
 
+// 获取meta.json的数据
 func readMetaFile(dir string) (*BlockMeta, int64, error) {
 	b, err := ioutil.ReadFile(filepath.Join(dir, metaFilename))
 	if err != nil {
@@ -220,7 +223,7 @@ func readMetaFile(dir string) (*BlockMeta, int64, error) {
 
 	return &m, int64(len(b)), nil
 }
-
+// 写入元数据文件
 func writeMetaFile(logger log.Logger, dir string, meta *BlockMeta) (int64, error) {
 	meta.Version = 1
 
@@ -264,6 +267,7 @@ func writeMetaFile(logger log.Logger, dir string, meta *BlockMeta) (int64, error
 }
 
 // Block represents a directory of time series data covering a continuous time range.
+// block 代表涵盖连续时间范围的时间序列数据目录
 type Block struct {
 	mtx            sync.RWMutex
 	closing        bool
@@ -290,6 +294,7 @@ type Block struct {
 
 // OpenBlock opens the block in the directory. It can be passed a chunk pool, which is used
 // to instantiate chunk structs.
+// 根据给予地址 打开一个block目录
 func OpenBlock(logger log.Logger, dir string, pool chunkenc.Pool) (pb *Block, err error) {
 	if logger == nil {
 		logger = log.NewNopLogger()

@@ -62,6 +62,7 @@ var userAgent = fmt.Sprintf("Prometheus/%s", version.Version)
 
 // Alert is a generic representation of an alert in the Prometheus eco-system.
 // 警报是普罗米修斯生态系统中警报的一般表示。
+// 告警定义
 type Alert struct {
 	// Label value pairs for purpose of aggregation, matching, and disposition
 	// dispatching. This must minimally include an "alertname" label.

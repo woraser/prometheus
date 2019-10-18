@@ -227,6 +227,7 @@ func newHeadMetrics(h *Head, r prometheus.Registerer) *headMetrics {
 }
 
 // NewHead opens the head block in dir.
+// 打开目录中头部的block
 func NewHead(r prometheus.Registerer, l log.Logger, wal *wal.WAL, chunkRange int64) (*Head, error) {
 	if l == nil {
 		l = log.NewNopLogger()
@@ -246,6 +247,7 @@ func NewHead(r prometheus.Registerer, l log.Logger, wal *wal.WAL, chunkRange int
 		postings:   index.NewUnorderedMemPostings(),
 		deleted:    map[uint64]int{},
 	}
+	// 定义head的metric
 	h.metrics = newHeadMetrics(h, r)
 
 	return h, nil

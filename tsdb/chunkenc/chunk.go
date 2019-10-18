@@ -87,6 +87,8 @@ type pool struct {
 }
 
 // NewPool returns a new pool.
+// 返回一个新的chunk pool
+// chunk 纯数据块
 func NewPool() Pool {
 	return &pool{
 		xor: sync.Pool{

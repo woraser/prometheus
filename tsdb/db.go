@@ -60,6 +60,7 @@ type Options struct {
 	// WALSegmentSize = 0, segment size is default size.
 	// WALSegmentSize > 0, segment size is WALSegmentSize.
 	// WALSegmentSize < 0, wal is disabled.
+	// wal的文大小
 	WALSegmentSize int
 
 	// Duration of persisted data to keep.
@@ -114,14 +115,14 @@ type Appender interface {
 // DB handles reads and writes of time series falling into
 // a hashed partition of a seriedb.
 type DB struct {
-	dir   string
-	lockf fileutil.Releaser
+	dir   string	// 目录里路
+	lockf fileutil.Releaser	// lock文件
 
 	logger    log.Logger
 	metrics   *dbMetrics
 	opts      *Options
-	chunkPool chunkenc.Pool
-	compactor Compactor
+	chunkPool chunkenc.Pool	//数据块pool
+	compactor Compactor	// block压缩器
 
 	// Mutex for that must be held when modifying the general block layout.
 	mtx    sync.RWMutex
@@ -262,6 +263,7 @@ var ErrClosed = errors.New("db already closed")
 // DBReadOnly provides APIs for read only operations on a database.
 // Current implementation doesn't support concurency so
 // all API calls should happen in the same go routine.
+// 定义只读db
 type DBReadOnly struct {
 	logger  log.Logger
 	dir     string
@@ -270,6 +272,7 @@ type DBReadOnly struct {
 }
 
 // OpenDBReadOnly opens DB in the given directory for read only operations.
+// 打开只读的db
 func OpenDBReadOnly(dir string, l log.Logger) (*DBReadOnly, error) {
 	if _, err := os.Stat(dir); err != nil {
 		return nil, errors.Wrap(err, "openning the db dir")
@@ -288,18 +291,21 @@ func OpenDBReadOnly(dir string, l log.Logger) (*DBReadOnly, error) {
 
 // Querier loads the wal and returns a new querier over the data partition for the given time range.
 // Current implementation doesn't support multiple Queriers.
+// 只读db查询器
 func (db *DBReadOnly) Querier(mint, maxt int64) (Querier, error) {
 	select {
 	case <-db.closed:
 		return nil, ErrClosed
 	default:
 	}
+	// 获取db的block
 	blocksReaders, err := db.Blocks()
 	if err != nil {
 		return nil, err
 	}
 	blocks := make([]*Block, len(blocksReaders))
 	for i, b := range blocksReaders {
+		// 判断是否是标准block
 		b, ok := b.(*Block)
 		if !ok {
 			return nil, errors.New("unable to convert a read only block to a normal block")
@@ -317,6 +323,7 @@ func (db *DBReadOnly) Querier(mint, maxt int64) (Querier, error) {
 	}
 
 	// Also add the WAL if the current blocks don't cover the requestes time range.
+	// 如果当前块未覆盖请求的时间范围，则还要添加WAL
 	if maxBlockTime <= maxt {
 		w, err := wal.Open(db.logger, nil, filepath.Join(db.dir, "wal"))
 		if err != nil {
@@ -353,6 +360,7 @@ func (db *DBReadOnly) Querier(mint, maxt int64) (Querier, error) {
 }
 
 // Blocks returns a slice of block readers for persisted blocks.
+// 返回持久块的块读取器的一部分block
 func (db *DBReadOnly) Blocks() ([]BlockReader, error) {
 	select {
 	case <-db.closed:
@@ -429,7 +437,9 @@ func (db *DBReadOnly) Close() error {
 }
 
 // Open returns a new DB in the given directory.
+// 在指定目录新建一个db
 func Open(dir string, l log.Logger, r prometheus.Registerer, opts *Options) (db *DB, err error) {
+	// 创建目录
 	if err := os.MkdirAll(dir, 0777); err != nil {
 		return nil, err
 	}
@@ -440,10 +450,12 @@ func Open(dir string, l log.Logger, r prometheus.Registerer, opts *Options) (db 
 		opts = DefaultOptions
 	}
 	// Fixup bad format written by Prometheus 2.1.
+	// TODO ？
 	if err := repairBadIndexVersion(l, dir); err != nil {
 		return nil, err
 	}
 	// Migrate old WAL if one exists.
+	// 迁移老数据，如果当前目录存在wai文件
 	if err := MigrateWAL(l, filepath.Join(dir, "wal")); err != nil {
 		return nil, errors.Wrap(err, "migrate WAL")
 	}
@@ -455,17 +467,18 @@ func Open(dir string, l log.Logger, r prometheus.Registerer, opts *Options) (db 
 		compactc:    make(chan struct{}, 1),
 		donec:       make(chan struct{}),
 		stopc:       make(chan struct{}),
-		autoCompact: true,
-		chunkPool:   chunkenc.NewPool(),
+		autoCompact: true,	// 自动压缩
+		chunkPool:   chunkenc.NewPool(),	// 数据块pool
 	}
+	// 新建db的metric
 	db.metrics = newDBMetrics(db, r)
-
+	// 设置数据最大值，必须>=0
 	maxBytes := opts.MaxBytes
 	if maxBytes < 0 {
 		maxBytes = 0
 	}
 	db.metrics.maxBytes.Set(float64(maxBytes))
-
+	// lock 文件处理
 	if !opts.NoLockfile {
 		absdir, err := filepath.Abs(dir)
 		if err != nil {
@@ -479,6 +492,8 @@ func Open(dir string, l log.Logger, r prometheus.Registerer, opts *Options) (db 
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	// 新的层级压缩器
+	// BlockRanges： block的大小 range：时间范围区间
 	db.compactor, err = NewLeveledCompactor(ctx, r, l, opts.BlockRanges, db.chunkPool)
 	if err != nil {
 		cancel()
@@ -487,6 +502,7 @@ func Open(dir string, l log.Logger, r prometheus.Registerer, opts *Options) (db 
 	db.compactCancel = cancel
 
 	var wlog *wal.WAL
+	// 默认分割大小
 	segmentSize := wal.DefaultSegmentSize
 	// Wal is enabled.
 	if opts.WALSegmentSize >= 0 {
@@ -499,17 +515,18 @@ func Open(dir string, l log.Logger, r prometheus.Registerer, opts *Options) (db 
 			return nil, err
 		}
 	}
-
+	// 新的头文件
 	db.head, err = NewHead(r, l, wlog, opts.BlockRanges[0])
 	if err != nil {
 		return nil, err
 	}
-
+	// TODO 重载db
 	if err := db.reload(); err != nil {
 		return nil, err
 	}
 	// Set the min valid time for the ingested samples
 	// to be no lower than the maxt of the last block.
+	// 设置摄入样品的最短有效时间
 	blocks := db.Blocks()
 	minValidTime := int64(math.MinInt64)
 	if len(blocks) > 0 {
@@ -519,11 +536,12 @@ func Open(dir string, l log.Logger, r prometheus.Registerer, opts *Options) (db 
 	if initErr := db.head.Init(minValidTime); initErr != nil {
 		db.head.metrics.walCorruptionsTotal.Inc()
 		level.Warn(db.logger).Log("msg", "encountered WAL read error, attempting repair", "err", err)
+		// 校验wal文件，如果损坏，抛弃所有数据
 		if err := wlog.Repair(initErr); err != nil {
 			return nil, errors.Wrap(err, "repair corrupted WAL")
 		}
 	}
-
+	// db运行，执行block合并任务
 	go db.run()
 
 	return db, nil
@@ -533,7 +551,7 @@ func Open(dir string, l log.Logger, r prometheus.Registerer, opts *Options) (db 
 func (db *DB) Dir() string {
 	return db.dir
 }
-
+// 运行逻辑
 func (db *DB) run() {
 	defer close(db.donec)
 
@@ -547,15 +565,18 @@ func (db *DB) run() {
 		}
 
 		select {
+		// 1分钟1次的断续器
 		case <-time.After(1 * time.Minute):
 			select {
 			case db.compactc <- struct{}{}:
 			default:
 			}
 		case <-db.compactc:
+			// 数据压缩
 			db.metrics.compactionsTriggered.Inc()
 
 			db.autoCompactMtx.Lock()
+			// 是否是自动压缩
 			if db.autoCompact {
 				if err := db.compact(); err != nil {
 					level.Error(db.logger).Log("msg", "compaction failed", "err", err)
@@ -606,16 +627,22 @@ func (a dbAppender) Commit() error {
 // this is sufficient to reliably delete old data.
 // Old blocks are only deleted on reload based on the new block's parent information.
 // See DB.reload documentation for further information.
+// db 压缩
+// 压缩数据，并在成功之后重载block
+// 仅在重新加载时才根据新块的父信息删除旧块
 func (db *DB) compact() (err error) {
 	db.cmtx.Lock()
 	defer db.cmtx.Unlock()
 	defer func() {
+		// 记录数据压缩时产生的错误
 		if err != nil {
 			db.metrics.compactionsFailed.Inc()
 		}
 	}()
 	// Check whether we have pending head blocks that are ready to be persisted.
 	// They have the highest priority.
+	// 检查是否有待保留的待处理头块。
+	// 它们具有最高优先级。
 	for {
 		select {
 		case <-db.stopc:
@@ -644,15 +671,17 @@ func (db *DB) compact() (err error) {
 		if err != nil {
 			return errors.Wrap(err, "persist head block")
 		}
-
+		// TODO 手动执行GC
 		runtime.GC()
-
+		// 重载db TODO reload()?
+		// 重试持久化数据，若失败则删除block
 		if err := db.reload(); err != nil {
 			if err := os.RemoveAll(filepath.Join(db.dir, uid.String())); err != nil {
 				return errors.Wrapf(err, "delete persisted head block after failed db reload:%s", uid)
 			}
 			return errors.Wrap(err, "reload blocks")
 		}
+		// 如果uid是空对象
 		if (uid == ulid.ULID{}) {
 			// Compaction resulted in an empty block.
 			// Head truncating during db.reload() depends on the persisted blocks and
@@ -665,7 +694,11 @@ func (db *DB) compact() (err error) {
 	}
 
 	// Check for compactions of multiple blocks.
+	// 检查多个块的压缩。
 	for {
+		// 获取当前能进行压缩的block目录
+		// 有时间重叠
+		// 待删除时间区过大
 		plan, err := db.compactor.Plan(db.dir)
 		if err != nil {
 			return errors.Wrap(err, "plan compaction")
@@ -679,7 +712,7 @@ func (db *DB) compact() (err error) {
 			return nil
 		default:
 		}
-
+		// 执行压缩，uid是
 		uid, err := db.compactor.Compact(db.dir, plan, db.blocks)
 		if err != nil {
 			return errors.Wrapf(err, "compact %s", plan)
@@ -711,6 +744,8 @@ func getBlock(allBlocks []*Block, id ulid.ULID) (*Block, bool) {
 
 // reload blocks and trigger head truncation if new blocks appeared.
 // Blocks that are obsolete due to replacement or retention will be deleted.
+// 重新加载块
+// 由于替换或保留而过时的块将被删除。
 func (db *DB) reload() (err error) {
 	defer func() {
 		if err != nil {

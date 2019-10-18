@@ -195,13 +195,14 @@ func Open(path string, l log.Logger, r prometheus.Registerer, opts *Options) (*t
 	if opts.MinBlockDuration > opts.MaxBlockDuration {
 		opts.MaxBlockDuration = opts.MinBlockDuration
 	}
+	// TODO rngs怎么理解？
 	// Start with smallest block duration and create exponential buckets until the exceed the
 	// configured maximum block duration.
 	// 以最小的块持续时间开始并创建存储块，直到超过配置的最大持续时间。
 	// rngs 10个数据块的时间区间 time ranges
 	// rngs = [1, 1*3, 1*3*3....]
 	rngs := tsdb.ExponentialBlockRanges(int64(time.Duration(opts.MinBlockDuration).Seconds()*1000), 10, 3)
-
+	// 确定block范围
 	for i, v := range rngs {
 		// 遍历数据块，数据块的时间范围不能超过最大值
 		if v > int64(time.Duration(opts.MaxBlockDuration).Seconds()*1000) {
@@ -210,18 +211,20 @@ func Open(path string, l log.Logger, r prometheus.Registerer, opts *Options) (*t
 		}
 	}
 	// 打开tsdb存储引擎
+	// TODO AllowOverlappingBlocks 和解？NoLockfile？
 	db, err := tsdb.Open(path, l, r, &tsdb.Options{
 		WALSegmentSize:         int(opts.WALSegmentSize),
 		RetentionDuration:      uint64(time.Duration(opts.RetentionDuration).Seconds() * 1000),
 		MaxBytes:               int64(opts.MaxBytes), // 数据的最大字节数
 		BlockRanges:            rngs,	// 存储块大小范围[a, a*3, a*3*3...]
-		NoLockfile:             opts.NoLockfile,
+		NoLockfile:             opts.NoLockfile,	// 是否锁定文件
 		AllowOverlappingBlocks: opts.AllowOverlappingBlocks,
-		WALCompression:         opts.WALCompression,
+		WALCompression:         opts.WALCompression,	// 是否进行wal文件压缩
 	})
 	if err != nil {
 		return nil, err
 	}
+	// metric注册
 	registerMetrics(db, r)
 
 	return db, nil

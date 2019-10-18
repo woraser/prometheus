@@ -193,6 +193,7 @@ func New(logger log.Logger, reg prometheus.Registerer, dir string, compress bool
 
 // NewSize returns a new WAL over the given directory.
 // New segments are created with the specified size.
+// NewSize在给定目录上返回一个新的WAL 将以指定的大小创建新的细分。
 func NewSize(logger log.Logger, reg prometheus.Registerer, dir string, segmentSize int, compress bool) (*WAL, error) {
 	if segmentSize%pageSize != 0 {
 		return nil, errors.New("invalid segment size")

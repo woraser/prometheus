@@ -70,6 +70,7 @@ type Compactor interface {
 	//  * No block is written.
 	//  * The source dirs are marked Deletable.
 	//  * Returns empty ulid.ULID{}.
+	// 执行数据压缩
 	Compact(dest string, dirs []string, open []*Block) (ulid.ULID, error)
 }
 
@@ -143,6 +144,7 @@ func newCompactorMetrics(r prometheus.Registerer) *compactorMetrics {
 }
 
 // NewLeveledCompactor returns a LeveledCompactor.
+// 层级压缩工具
 func NewLeveledCompactor(ctx context.Context, r prometheus.Registerer, l log.Logger, ranges []int64, pool chunkenc.Pool) (*LeveledCompactor, error) {
 	if len(ranges) == 0 {
 		return nil, errors.Errorf("at least one range must be provided")
@@ -168,6 +170,7 @@ type dirMeta struct {
 }
 
 // Plan returns a list of compactable blocks in the provided directory.
+// 获取可以压缩的文件目录
 func (c *LeveledCompactor) Plan(dir string) ([]string, error) {
 	dirs, err := blockDirs(dir)
 	if err != nil {
@@ -179,6 +182,7 @@ func (c *LeveledCompactor) Plan(dir string) ([]string, error) {
 
 	var dms []dirMeta
 	for _, dir := range dirs {
+		// 可以读取到元数据
 		meta, _, err := readMetaFile(dir)
 		if err != nil {
 			return nil, err
@@ -187,12 +191,13 @@ func (c *LeveledCompactor) Plan(dir string) ([]string, error) {
 	}
 	return c.plan(dms)
 }
-
+// 判断是否可以压缩
 func (c *LeveledCompactor) plan(dms []dirMeta) ([]string, error) {
+	// dirMeta时间集合排序 0,1,2,3....
 	sort.Slice(dms, func(i, j int) bool {
 		return dms[i].meta.MinTime < dms[j].meta.MinTime
 	})
-
+	// 获取时间重叠的blocks
 	res := c.selectOverlappingDirs(dms)
 	if len(res) > 0 {
 		return res, nil
@@ -200,8 +205,11 @@ func (c *LeveledCompactor) plan(dms []dirMeta) ([]string, error) {
 	// No overlapping blocks, do compaction the usual way.
 	// We do not include a recently created block with max(minTime), so the block which was just created from WAL.
 	// This gives users a window of a full block size to piece-wise backup new data without having to care about data overlap.
+	//没有重叠的块，按常规方式进行压缩。
+	//我们不包括带有max（minTime）的最近创建的块，因此刚从WAL创建的块。block都是从wal中刚刚新建的
+	//这为用户提供了一个完整块大小的block，可以分段备份新数据，而不必担心数据重叠。
 	dms = dms[:len(dms)-1]
-
+	// 选择可压缩目录
 	for _, dm := range c.selectDirs(dms) {
 		res = append(res, dm.dir)
 	}
@@ -210,6 +218,7 @@ func (c *LeveledCompactor) plan(dms []dirMeta) ([]string, error) {
 	}
 
 	// Compact any blocks with big enough time range that have >5% tombstones.
+	// 压缩任何具有足够大于5％删除区时间范围的块
 	for i := len(dms) - 1; i >= 0; i-- {
 		meta := dms[i].meta
 		if meta.MaxTime-meta.MinTime < c.ranges[len(c.ranges)/2] {
@@ -225,6 +234,8 @@ func (c *LeveledCompactor) plan(dms []dirMeta) ([]string, error) {
 
 // selectDirs returns the dir metas that should be compacted into a single new block.
 // If only a single block range is configured, the result is always nil.
+// selectDirs返回应压缩为单个新块的dir metas。
+// 如果仅配置了单个块范围，则结果始终为nil。
 func (c *LeveledCompactor) selectDirs(ds []dirMeta) []dirMeta {
 	if len(c.ranges) < 2 || len(ds) < 1 {
 		return nil
@@ -262,8 +273,9 @@ func (c *LeveledCompactor) selectDirs(ds []dirMeta) []dirMeta {
 	return nil
 }
 
-// selectOverlappingDirs returns all dirs with overlapping time ranges.
+// selectOverlappingDirs returns all dirs with overlapping time ranges. 重叠的时间范围
 // It expects sorted input by mint and returns the overlapping dirs in the same order as received.
+// 获取目录中时间重叠的block
 func (c *LeveledCompactor) selectOverlappingDirs(ds []dirMeta) []string {
 	if len(ds) < 2 {
 		return nil
@@ -328,7 +340,7 @@ func splitByRange(ds []dirMeta, tr int64) [][]dirMeta {
 
 	return splitDirs
 }
-
+// 合并block的meta
 func compactBlockMetas(uid ulid.ULID, blocks ...*BlockMeta) *BlockMeta {
 	res := &BlockMeta{
 		ULID:    uid,
@@ -341,6 +353,7 @@ func compactBlockMetas(uid ulid.ULID, blocks ...*BlockMeta) *BlockMeta {
 	maxt := int64(math.MinInt64)
 
 	for _, b := range blocks {
+		// 获取所有block中的最大时间
 		if b.MaxTime > maxt {
 			maxt = b.MaxTime
 		}
@@ -350,17 +363,21 @@ func compactBlockMetas(uid ulid.ULID, blocks ...*BlockMeta) *BlockMeta {
 		for _, s := range b.Compaction.Sources {
 			sources[s] = struct{}{}
 		}
+		// 追加新block的上级文件
 		res.Compaction.Parents = append(res.Compaction.Parents, BlockDesc{
 			ULID:    b.ULID,
 			MinTime: b.MinTime,
 			MaxTime: b.MaxTime,
 		})
 	}
+	// 压缩层级+！
 	res.Compaction.Level++
 
 	for s := range sources {
+		// 合并resource
 		res.Compaction.Sources = append(res.Compaction.Sources, s)
 	}
+	// 排序
 	sort.Slice(res.Compaction.Sources, func(i, j int) bool {
 		return res.Compaction.Sources[i].Compare(res.Compaction.Sources[j]) < 0
 	})
@@ -371,6 +388,7 @@ func compactBlockMetas(uid ulid.ULID, blocks ...*BlockMeta) *BlockMeta {
 
 // Compact creates a new block in the compactor's directory from the blocks in the
 // provided directories.
+// 压缩多个block 为一个新的 block
 func (c *LeveledCompactor) Compact(dest string, dirs []string, open []*Block) (uid ulid.ULID, err error) {
 	var (
 		blocks []BlockReader
@@ -379,8 +397,9 @@ func (c *LeveledCompactor) Compact(dest string, dirs []string, open []*Block) (u
 		uids   []string
 	)
 	start := time.Now()
-
+	// 循环处理多个目录
 	for _, d := range dirs {
+		// 获取目录中的meta数据，在meta.json
 		meta, _, err := readMetaFile(d)
 		if err != nil {
 			return uid, err
@@ -390,32 +409,35 @@ func (c *LeveledCompactor) Compact(dest string, dirs []string, open []*Block) (u
 
 		// Use already open blocks if we can, to avoid
 		// having the index data in memory twice.
+		// 使用现在已经打开的block，避免产生重复数据
 		for _, o := range open {
 			if meta.ULID == o.Meta().ULID {
 				b = o
 				break
 			}
 		}
-
+		// 如果没有打开的block
 		if b == nil {
 			var err error
+			// 根据目录地址 打开新的block
 			b, err = OpenBlock(c.logger, d, c.chunkPool)
 			if err != nil {
 				return uid, err
 			}
 			defer b.Close()
 		}
-
+		// meta，block，bs，uid合并
 		metas = append(metas, meta)
 		blocks = append(blocks, b)
 		bs = append(bs, b)
 		uids = append(uids, meta.ULID.String())
 	}
-
+	// 根据当前时间戳生存新的uid
 	entropy := rand.New(rand.NewSource(time.Now().UnixNano()))
 	uid = ulid.MustNew(ulid.Now(), entropy)
-
+	// 合并block的meta
 	meta := compactBlockMetas(uid, metas...)
+	// meta写入
 	err = c.write(dest, meta, blocks...)
 	if err == nil {
 		if meta.Stats.NumSamples == 0 {
@@ -524,10 +546,15 @@ func (w *instrumentedChunkWriter) WriteChunks(chunks ...chunks.Meta) error {
 
 // write creates a new block that is the union of the provided blocks into dir.
 // It cleans up all files of the old blocks after completing successfully.
+// write创建一个新块，该块是将提供的块合并为dir。
+// 成功完成后，它将清除旧块的所有文件。
 func (c *LeveledCompactor) write(dest string, meta *BlockMeta, blocks ...BlockReader) (err error) {
+	// 生成新的block目录
 	dir := filepath.Join(dest, meta.ULID.String())
+	// 生存临时文件tmp
 	tmp := dir + ".tmp"
 	var closers []io.Closer
+	// 函数结束方法
 	defer func(t time.Time) {
 		var merr tsdb_errors.MultiError
 		merr.Add(err)
@@ -535,13 +562,15 @@ func (c *LeveledCompactor) write(dest string, meta *BlockMeta, blocks ...BlockRe
 		err = merr.Err()
 
 		// RemoveAll returns no error when tmp doesn't exist so it is safe to always run it.
+		// 删除临时文件
 		if err := os.RemoveAll(tmp); err != nil {
 			level.Error(c.logger).Log("msg", "removed tmp folder after failed compaction", "err", err.Error())
 		}
+		// 设置metric
 		c.metrics.ran.Inc()
 		c.metrics.duration.Observe(time.Since(t).Seconds())
 	}(time.Now())
-
+	// 先校验能否删除tmp目录
 	if err = os.RemoveAll(tmp); err != nil {
 		return err
 	}
@@ -552,14 +581,17 @@ func (c *LeveledCompactor) write(dest string, meta *BlockMeta, blocks ...BlockRe
 
 	// Populate chunk and index files into temporary directory with
 	// data of all blocks.
+	// 数据块写入器
 	var chunkw ChunkWriter
 
 	chunkw, err = chunks.NewWriter(chunkDir(tmp))
 	if err != nil {
 		return errors.Wrap(err, "open chunk writer")
 	}
+	// 写入器加入关闭名单中
 	closers = append(closers, chunkw)
 	// Record written chunk sizes on level 1 compactions.
+	// 只有压缩次数为1的时候执行
 	if meta.Compaction.Level == 1 {
 		chunkw = &instrumentedChunkWriter{
 			ChunkWriter: chunkw,
@@ -568,13 +600,13 @@ func (c *LeveledCompactor) write(dest string, meta *BlockMeta, blocks ...BlockRe
 			trange:      c.metrics.chunkRange,
 		}
 	}
-
+	// 创建index写入器
 	indexw, err := index.NewWriter(filepath.Join(tmp, indexFilename))
 	if err != nil {
 		return errors.Wrap(err, "open index writer")
 	}
 	closers = append(closers, indexw)
-
+	// 将meta，index，数据块写入block中
 	if err := c.populateBlock(blocks, meta, indexw, chunkw); err != nil {
 		return errors.Wrap(err, "write compaction")
 	}
@@ -590,6 +622,7 @@ func (c *LeveledCompactor) write(dest string, meta *BlockMeta, blocks ...BlockRe
 	// you cannot delete these unless they are closed and the defer is to
 	// make sure they are closed if the function exits due to an error above.
 	var merr tsdb_errors.MultiError
+	// 关闭
 	for _, w := range closers {
 		merr.Add(w.Close())
 	}
@@ -599,10 +632,11 @@ func (c *LeveledCompactor) write(dest string, meta *BlockMeta, blocks ...BlockRe
 	}
 
 	// Populated block is empty, so exit early.
+	// 压缩的block为空。字节返回
 	if meta.Stats.NumSamples == 0 {
 		return nil
 	}
-
+	// 写入meta.json
 	if _, err = writeMetaFile(c.logger, tmp, meta); err != nil {
 		return errors.Wrap(err, "write merged meta")
 	}
@@ -611,7 +645,7 @@ func (c *LeveledCompactor) write(dest string, meta *BlockMeta, blocks ...BlockRe
 	if _, err := writeTombstoneFile(c.logger, tmp, newMemTombstones()); err != nil {
 		return errors.Wrap(err, "write new tombstones file")
 	}
-
+	// 打开临时目录
 	df, err := fileutil.OpenDir(tmp)
 	if err != nil {
 		return errors.Wrap(err, "open temporary block dir")
@@ -621,12 +655,13 @@ func (c *LeveledCompactor) write(dest string, meta *BlockMeta, blocks ...BlockRe
 			df.Close()
 		}
 	}()
-
+	// 临时数据存储化
 	if err := df.Sync(); err != nil {
 		return errors.Wrap(err, "sync temporary dir file")
 	}
 
 	// Close temp dir before rename block dir (for windows platform).
+	// 关闭临时目录
 	if err = df.Close(); err != nil {
 		return errors.Wrap(err, "close temporary dir")
 	}
@@ -643,6 +678,8 @@ func (c *LeveledCompactor) write(dest string, meta *BlockMeta, blocks ...BlockRe
 // populateBlock fills the index and chunk writers with new data gathered as the union
 // of the provided blocks. It returns meta information for the new block.
 // It expects sorted blocks input by mint.
+// populateBlock使用收集的新数据填充索引和块写入器，这些数据是作为提供的块的并集而收集的。 它返回新块的元信息。
+// 期望由mint输入的排序块。
 func (c *LeveledCompactor) populateBlock(blocks []BlockReader, meta *BlockMeta, indexw IndexWriter, chunkw ChunkWriter) (err error) {
 	if len(blocks) == 0 {
 		return errors.New("cannot populate block from no readers")
@@ -664,6 +701,7 @@ func (c *LeveledCompactor) populateBlock(blocks []BlockReader, meta *BlockMeta, 
 	c.metrics.populatingBlocks.Set(1)
 
 	globalMaxt := blocks[0].Meta().MaxTime
+	// 遍历每一个block
 	for i, b := range blocks {
 		select {
 		case <-c.ctx.Done():
@@ -677,23 +715,24 @@ func (c *LeveledCompactor) populateBlock(blocks []BlockReader, meta *BlockMeta, 
 				overlapping = true
 				level.Warn(c.logger).Log("msg", "found overlapping blocks during compaction", "ulid", meta.ULID)
 			}
+			// 获取blocks中的最大时间
 			if b.Meta().MaxTime > globalMaxt {
 				globalMaxt = b.Meta().MaxTime
 			}
 		}
-
+		// 打开block的索引
 		indexr, err := b.Index()
 		if err != nil {
 			return errors.Wrapf(err, "open index reader for block %s", b)
 		}
 		closers = append(closers, indexr)
-
+		// 打开block的数据块
 		chunkr, err := b.Chunks()
 		if err != nil {
 			return errors.Wrapf(err, "open chunk reader for block %s", b)
 		}
 		closers = append(closers, chunkr)
-
+		// 打开block的数据移除块
 		tombsr, err := b.Tombstones()
 		if err != nil {
 			return errors.Wrapf(err, "open tombstone reader for block %s", b)
@@ -712,8 +751,9 @@ func (c *LeveledCompactor) populateBlock(blocks []BlockReader, meta *BlockMeta, 
 		if err != nil {
 			return err
 		}
+		// 数据排序
 		all = indexr.SortedPostings(all)
-
+		// 新建压缩序列集合
 		s := newCompactionSeriesSet(indexr, chunkr, tombsr, all)
 
 		if i == 0 {
@@ -757,7 +797,7 @@ func (c *LeveledCompactor) populateBlock(blocks []BlockReader, meta *BlockMeta, 
 		if len(chks) == 0 {
 			continue
 		}
-
+		// 遍历chunks
 		for i, chk := range chks {
 			// Re-encode head chunks that are still open (being appended to) or
 			// outside the compacted MaxTime range.
