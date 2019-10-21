@@ -681,7 +681,7 @@ func (db *DB) compact() (err error) {
 			}
 			return errors.Wrap(err, "reload blocks")
 		}
-		// 如果uid是空对象
+		//
 		if (uid == ulid.ULID{}) {
 			// Compaction resulted in an empty block.
 			// Head truncating during db.reload() depends on the persisted blocks and
@@ -698,7 +698,8 @@ func (db *DB) compact() (err error) {
 	for {
 		// 获取当前能进行压缩的block目录
 		// 有时间重叠
-		// 待删除时间区过大
+		// 过滤压缩失败的block
+		// 待删除数据区过大
 		plan, err := db.compactor.Plan(db.dir)
 		if err != nil {
 			return errors.Wrap(err, "plan compaction")
@@ -712,7 +713,7 @@ func (db *DB) compact() (err error) {
 			return nil
 		default:
 		}
-		// 执行压缩，uid是
+		// 执行压缩，uid是压缩后的新block的uid
 		uid, err := db.compactor.Compact(db.dir, plan, db.blocks)
 		if err != nil {
 			return errors.Wrapf(err, "compact %s", plan)
@@ -841,15 +842,16 @@ func (db *DB) reload() (err error) {
 
 	return errors.Wrap(db.head.Truncate(maxt), "head truncate failed")
 }
-
+// 打开block
 func openBlocks(l log.Logger, dir string, loaded []*Block, chunkPool chunkenc.Pool) (blocks []*Block, corrupted map[ulid.ULID]error, err error) {
 	bDirs, err := blockDirs(dir)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "find blocks")
 	}
-
+	// block错误集合
 	corrupted = make(map[ulid.ULID]error)
 	for _, bDir := range bDirs {
+		// 获取元数据 meta.json
 		meta, _, err := readMetaFile(bDir)
 		if err != nil {
 			level.Error(l).Log("msg", "not a block dir", "dir", bDir)
@@ -857,6 +859,7 @@ func openBlocks(l log.Logger, dir string, loaded []*Block, chunkPool chunkenc.Po
 		}
 
 		// See if we already have the block in memory or open it otherwise.
+		// 判断内存中是否有已经打开的block
 		block, open := getBlock(loaded, meta.ULID)
 		if !open {
 			block, err = OpenBlock(l, bDir, chunkPool)

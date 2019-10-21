@@ -391,10 +391,10 @@ func compactBlockMetas(uid ulid.ULID, blocks ...*BlockMeta) *BlockMeta {
 // 压缩多个block 为一个新的 block
 func (c *LeveledCompactor) Compact(dest string, dirs []string, open []*Block) (uid ulid.ULID, err error) {
 	var (
-		blocks []BlockReader
-		bs     []*Block
-		metas  []*BlockMeta
-		uids   []string
+		blocks []BlockReader	// 只读对象block
+		bs     []*Block	// 完整对象block
+		metas  []*BlockMeta	// block元数据
+		uids   []string	// block uid集合
 	)
 	start := time.Now()
 	// 循环处理多个目录
@@ -549,12 +549,12 @@ func (w *instrumentedChunkWriter) WriteChunks(chunks ...chunks.Meta) error {
 // write创建一个新块，该块是将提供的块合并为dir。
 // 成功完成后，它将清除旧块的所有文件。
 func (c *LeveledCompactor) write(dest string, meta *BlockMeta, blocks ...BlockReader) (err error) {
-	// 生成新的block目录
+	// 根据uid生成新的block目录
 	dir := filepath.Join(dest, meta.ULID.String())
 	// 生存临时文件tmp
 	tmp := dir + ".tmp"
 	var closers []io.Closer
-	// 函数结束方法
+	// 函数结束方法 删除临时文件 记录metric
 	defer func(t time.Time) {
 		var merr tsdb_errors.MultiError
 		merr.Add(err)
@@ -574,7 +574,7 @@ func (c *LeveledCompactor) write(dest string, meta *BlockMeta, blocks ...BlockRe
 	if err = os.RemoveAll(tmp); err != nil {
 		return err
 	}
-
+	// 重新创建临时目录
 	if err = os.MkdirAll(tmp, 0777); err != nil {
 		return err
 	}
@@ -583,7 +583,7 @@ func (c *LeveledCompactor) write(dest string, meta *BlockMeta, blocks ...BlockRe
 	// data of all blocks.
 	// 数据块写入器
 	var chunkw ChunkWriter
-
+	// 新的数据块 写入器
 	chunkw, err = chunks.NewWriter(chunkDir(tmp))
 	if err != nil {
 		return errors.Wrap(err, "open chunk writer")
@@ -607,6 +607,7 @@ func (c *LeveledCompactor) write(dest string, meta *BlockMeta, blocks ...BlockRe
 	}
 	closers = append(closers, indexw)
 	// 将meta，index，数据块写入block中
+	// CORE
 	if err := c.populateBlock(blocks, meta, indexw, chunkw); err != nil {
 		return errors.Wrap(err, "write compaction")
 	}
@@ -680,6 +681,7 @@ func (c *LeveledCompactor) write(dest string, meta *BlockMeta, blocks ...BlockRe
 // It expects sorted blocks input by mint.
 // populateBlock使用收集的新数据填充索引和块写入器，这些数据是作为提供的块的并集而收集的。 它返回新块的元信息。
 // 期望由mint输入的排序块。
+// 向压缩block中填充数据
 func (c *LeveledCompactor) populateBlock(blocks []BlockReader, meta *BlockMeta, indexw IndexWriter, chunkw ChunkWriter) (err error) {
 	if len(blocks) == 0 {
 		return errors.New("cannot populate block from no readers")
@@ -691,6 +693,7 @@ func (c *LeveledCompactor) populateBlock(blocks []BlockReader, meta *BlockMeta, 
 		closers     = []io.Closer{}
 		overlapping bool
 	)
+	// 返货错误集合
 	defer func() {
 		var merr tsdb_errors.MultiError
 		merr.Add(err)
@@ -708,7 +711,7 @@ func (c *LeveledCompactor) populateBlock(blocks []BlockReader, meta *BlockMeta, 
 			return c.ctx.Err()
 		default:
 		}
-
+		// 没有时间冲突
 		if !overlapping {
 			if i > 0 && b.Meta().MinTime < globalMaxt {
 				c.metrics.overlappingBlocks.Inc()
@@ -751,7 +754,7 @@ func (c *LeveledCompactor) populateBlock(blocks []BlockReader, meta *BlockMeta, 
 		if err != nil {
 			return err
 		}
-		// 数据排序
+		// indexr排序
 		all = indexr.SortedPostings(all)
 		// 新建压缩序列集合
 		s := newCompactionSeriesSet(indexr, chunkr, tombsr, all)
@@ -760,6 +763,7 @@ func (c *LeveledCompactor) populateBlock(blocks []BlockReader, meta *BlockMeta, 
 			set = s
 			continue
 		}
+		// 新建压缩工具
 		set, err = newCompactionMerger(set, s)
 		if err != nil {
 			return err
@@ -776,7 +780,7 @@ func (c *LeveledCompactor) populateBlock(blocks []BlockReader, meta *BlockMeta, 
 	if err := indexw.AddSymbols(allSymbols); err != nil {
 		return errors.Wrap(err, "add symbols")
 	}
-
+	// 删除数据集合
 	delIter := &deletedIterator{}
 	for set.Next() {
 		select {
@@ -788,12 +792,14 @@ func (c *LeveledCompactor) populateBlock(blocks []BlockReader, meta *BlockMeta, 
 		lset, chks, dranges := set.At() // The chunks here are not fully deleted.
 		if overlapping {
 			// If blocks are overlapping, it is possible to have unsorted chunks.
+			// 如果block有时间重叠，就重新排序
 			sort.Slice(chks, func(i, j int) bool {
 				return chks[i].MinTime < chks[j].MinTime
 			})
 		}
 
 		// Skip the series with all deleted chunks.
+		// 如果数据块为空， 则继续遍历
 		if len(chks) == 0 {
 			continue
 		}
@@ -851,6 +857,7 @@ func (c *LeveledCompactor) populateBlock(blocks []BlockReader, meta *BlockMeta, 
 		}
 
 		mergedChks := chks
+		// 合并重叠时间段的数据
 		if overlapping {
 			mergedChks, err = chunks.MergeOverlappingChunks(chks)
 			if err != nil {

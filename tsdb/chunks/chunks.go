@@ -283,10 +283,11 @@ func MergeChunks(a, b chunkenc.Chunk) (*chunkenc.XORChunk, error) {
 	}
 	return newChunk, nil
 }
-
+// 写入数据块的数据
 func (w *Writer) WriteChunks(chks ...Meta) error {
 	// Calculate maximum space we need and cut a new segment in case
 	// we don't fit into the current one.
+	// 计算数据大小
 	maxLen := int64(binary.MaxVarintLen32) // The number of chunks.
 	for _, c := range chks {
 		maxLen += binary.MaxVarintLen32 + 1 // The number of bytes in the chunk and its encoding.
