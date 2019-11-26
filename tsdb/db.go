@@ -1318,7 +1318,7 @@ func blockDirs(dir string) ([]string, error) {
 	}
 	return dirs, nil
 }
-
+// 目录中的有序文件
 func sequenceFiles(dir string) ([]string, error) {
 	files, err := ioutil.ReadDir(dir)
 	if err != nil {

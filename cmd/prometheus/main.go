@@ -355,6 +355,7 @@ func main() {
 	)
 
 	var (
+		// 程序顶部的上下文
 		ctxWeb, cancelWeb = context.WithCancel(context.Background())
 		ctxRule           = context.Background()
 		//通知

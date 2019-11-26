@@ -24,14 +24,17 @@ import (
 )
 
 // RecordType represents the data type of a record.
+// 记录的数据类型
 type RecordType uint8
 
 const (
 	// RecordInvalid is returned for unrecognised WAL record types.
 	RecordInvalid RecordType = 255
 	// RecordSeries is used to match WAL records of type Series.
+	// 时序
 	RecordSeries RecordType = 1
 	// RecordSamples is used to match WAL records of type Samples.
+	// 采样集
 	RecordSamples RecordType = 2
 	// RecordTombstones is used to match WAL records of type Tombstones.
 	RecordTombstones RecordType = 3
@@ -39,11 +42,13 @@ const (
 
 // RecordDecoder decodes series, sample, and tombstone records.
 // The zero value is ready to use.
+// record解析
 type RecordDecoder struct {
 }
 
 // Type returns the type of the record.
 // Return RecordInvalid if no valid record type is found.
+// 返回类型
 func (d *RecordDecoder) Type(rec []byte) RecordType {
 	if len(rec) < 1 {
 		return RecordInvalid
@@ -56,6 +61,7 @@ func (d *RecordDecoder) Type(rec []byte) RecordType {
 }
 
 // Series appends series in rec to the given slice.
+// Series 追加数据
 func (d *RecordDecoder) Series(rec []byte, series []RefSeries) ([]RefSeries, error) {
 	dec := encoding.Decbuf{B: rec}
 
@@ -88,6 +94,7 @@ func (d *RecordDecoder) Series(rec []byte, series []RefSeries) ([]RefSeries, err
 }
 
 // Samples appends samples in rec to the given slice.
+// Samples 追加数据
 func (d *RecordDecoder) Samples(rec []byte, samples []RefSample) ([]RefSample, error) {
 	dec := encoding.Decbuf{B: rec}
 
@@ -123,6 +130,7 @@ func (d *RecordDecoder) Samples(rec []byte, samples []RefSample) ([]RefSample, e
 }
 
 // Tombstones appends tombstones in rec to the given slice.
+// tombstones 追加数据
 func (d *RecordDecoder) Tombstones(rec []byte, tstones []Stone) ([]Stone, error) {
 	dec := encoding.Decbuf{B: rec}
 
@@ -148,6 +156,7 @@ func (d *RecordDecoder) Tombstones(rec []byte, tstones []Stone) ([]Stone, error)
 
 // RecordEncoder encodes series, sample, and tombstones records.
 // The zero value is ready to use.
+// record 序列化
 type RecordEncoder struct {
 }
 

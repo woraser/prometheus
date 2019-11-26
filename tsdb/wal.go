@@ -87,6 +87,7 @@ func newWalMetrics(wal *SegmentWAL, r prometheus.Registerer) *walMetrics {
 // It must be completely read before new entries are logged.
 //
 // DEPRECATED: use wal pkg combined with the record codex instead.
+// 数据日志，同一时间内只能有一个存在
 type WAL interface {
 	Reader() WALReader
 	LogSeries([]RefSeries) error
@@ -97,6 +98,7 @@ type WAL interface {
 }
 
 // WALReader reads entries from a WAL.
+// wal读取器
 type WALReader interface {
 	Read(
 		seriesf func([]RefSeries),
@@ -106,6 +108,7 @@ type WALReader interface {
 }
 
 // RefSeries is the series labels with the series ID.
+// Series id
 type RefSeries struct {
 	Ref    uint64
 	Labels labels.Labels
@@ -124,10 +127,11 @@ type RefSample struct {
 // segmentFile wraps a file object of a segment and tracks the highest timestamp
 // it contains. During WAL truncating, all segments with no higher timestamp than
 // the truncation threshold can be compacted.
+// wal文件分块存储，默认253MB
 type segmentFile struct {
 	*os.File
-	maxTime   int64  // highest tombstone or sample timpstamp in segment
-	minSeries uint64 // lowerst series ID in segment
+	maxTime   int64  // highest tombstone or sample timpstamp in segment 最大时间
+	minSeries uint64 // lowerst series ID in segment 最小的series ID
 }
 
 func newSegmentFile(f *os.File) *segmentFile {
@@ -158,6 +162,7 @@ func newCRC32() hash.Hash32 {
 }
 
 // SegmentWAL is a write ahead log for series data.
+// Wal Segment 写入器
 //
 // DEPRECATED: use wal pkg combined with the record coders instead.
 type SegmentWAL struct {
@@ -177,13 +182,15 @@ type SegmentWAL struct {
 
 	stopc   chan struct{}
 	donec   chan struct{}
-	actorc  chan func() error // sequentialized background operations
+	actorc  chan func() error // sequentialized background operations 序列化后台操作
 	buffers sync.Pool
 }
 
 // OpenSegmentWAL opens or creates a write ahead log in the given directory.
 // The WAL must be read completely before new data is written.
+// 打开wal的片区文件
 func OpenSegmentWAL(dir string, logger log.Logger, flushInterval time.Duration, r prometheus.Registerer) (*SegmentWAL, error) {
+	// check dir
 	if err := os.MkdirAll(dir, 0777); err != nil {
 		return nil, err
 	}
@@ -198,15 +205,16 @@ func OpenSegmentWAL(dir string, logger log.Logger, flushInterval time.Duration, 
 	w := &SegmentWAL{
 		dirFile:       df,
 		logger:        logger,
-		flushInterval: flushInterval,
+		flushInterval: flushInterval,	// 刷新周期
 		donec:         make(chan struct{}),
 		stopc:         make(chan struct{}),
 		actorc:        make(chan func() error, 1),
 		segmentSize:   walSegmentSizeBytes,
 		crc32:         newCRC32(),
 	}
+	// 监控metric
 	w.metrics = newWalMetrics(w, r)
-
+	// 获取目录中的文件列表
 	fns, err := sequenceFiles(w.dirFile.Name())
 	if err != nil {
 		return nil, err
@@ -632,6 +640,7 @@ func (w *SegmentWAL) head() *segmentFile {
 }
 
 // Sync flushes the changes to disk.
+// 将内存中的数据刷入硬盘中
 func (w *SegmentWAL) Sync() error {
 	var head *segmentFile
 	var err error
@@ -648,6 +657,7 @@ func (w *SegmentWAL) Sync() error {
 	if err != nil {
 		return errors.Wrap(err, "flush buffer")
 	}
+	// 数据持久化
 	if head != nil {
 		// But only fsync the head segment after releasing the mutex as it will block on disk I/O.
 		start := time.Now()
@@ -657,7 +667,7 @@ func (w *SegmentWAL) Sync() error {
 	}
 	return nil
 }
-
+// 持久化数据
 func (w *SegmentWAL) sync() error {
 	if err := w.flush(); err != nil {
 		return err
@@ -671,7 +681,7 @@ func (w *SegmentWAL) sync() error {
 	w.metrics.fsyncDuration.Observe(time.Since(start).Seconds())
 	return err
 }
-
+// 写入器刷新
 func (w *SegmentWAL) flush() error {
 	if w.cur == nil {
 		return nil
@@ -679,9 +689,10 @@ func (w *SegmentWAL) flush() error {
 	return w.cur.Flush()
 }
 
+// wal文件运行
 func (w *SegmentWAL) run(interval time.Duration) {
 	var tick <-chan time.Time
-
+	// 新建断续器
 	if interval > 0 {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -694,6 +705,7 @@ func (w *SegmentWAL) run(interval time.Duration) {
 		// background syncs.
 		select {
 		case f := <-w.actorc:
+			// 文件的分片
 			if err := f(); err != nil {
 				level.Error(w.logger).Log("msg", "operation failed", "err", err)
 			}
@@ -708,6 +720,7 @@ func (w *SegmentWAL) run(interval time.Duration) {
 				level.Error(w.logger).Log("msg", "operation failed", "err", err)
 			}
 		case <-tick:
+			// 写入数据同步
 			if err := w.Sync(); err != nil {
 				level.Error(w.logger).Log("msg", "sync failed", "err", err)
 			}
@@ -716,6 +729,7 @@ func (w *SegmentWAL) run(interval time.Duration) {
 }
 
 // Close syncs all data and closes the underlying resources.
+// 关闭w，需要先持久化数据
 func (w *SegmentWAL) Close() error {
 	// Make sure you can call Close() multiple times.
 	select {
@@ -797,7 +811,7 @@ const (
 	walSamplesSimple = 1
 	walDeletesSimple = 1
 )
-
+// 序列化Series
 func (w *SegmentWAL) encodeSeries(buf *encoding.Encbuf, series []RefSeries) uint8 {
 	for _, s := range series {
 		buf.PutBE64(s.Ref)
@@ -811,6 +825,7 @@ func (w *SegmentWAL) encodeSeries(buf *encoding.Encbuf, series []RefSeries) uint
 	return walSeriesSimple
 }
 
+// 序列化Samples
 func (w *SegmentWAL) encodeSamples(buf *encoding.Encbuf, samples []RefSample) uint8 {
 	if len(samples) == 0 {
 		return walSamplesSimple
@@ -832,6 +847,7 @@ func (w *SegmentWAL) encodeSamples(buf *encoding.Encbuf, samples []RefSample) ui
 	return walSamplesSimple
 }
 
+// 序列化待删除对象
 func (w *SegmentWAL) encodeDeletes(buf *encoding.Encbuf, stones []Stone) uint8 {
 	for _, s := range stones {
 		for _, iv := range s.intervals {
@@ -844,10 +860,11 @@ func (w *SegmentWAL) encodeDeletes(buf *encoding.Encbuf, stones []Stone) uint8 {
 }
 
 // walReader decodes and emits write ahead log entries.
+// 解析和发出写入实体
 type walReader struct {
 	logger log.Logger
 
-	files []*segmentFile
+	files []*segmentFile	// 分片文件
 	cur   int
 	buf   []byte
 	crc32 hash.Hash32
@@ -1082,6 +1099,7 @@ func (r *walReader) corruptionErr(s string, args ...interface{}) error {
 	}
 }
 
+// 条目
 func (r *walReader) entry(cr io.Reader) (WALEntryType, byte, []byte, error) {
 	r.crc32.Reset()
 	tr := io.TeeReader(cr, r.crc32)

@@ -34,6 +34,7 @@ const tombstoneFilename = "tombstones"
 
 const (
 	// MagicTombstone is 4 bytes at the head of a tombstone file.
+	// tombstone头部编码
 	MagicTombstone = 0x0130BA30
 
 	tombstoneFormatV1 = 1
@@ -54,6 +55,7 @@ type TombstoneReader interface {
 	Close() error
 }
 
+// 写入tombstone文件中
 func writeTombstoneFile(logger log.Logger, dir string, tr TombstoneReader) (int64, error) {
 	path := filepath.Join(dir, tombstoneFilename)
 	tmp := path + ".tmp"
@@ -128,11 +130,12 @@ func writeTombstoneFile(logger log.Logger, dir string, tr TombstoneReader) (int6
 
 // Stone holds the information on the posting and time-range
 // that is deleted.
+// 删除标记
 type Stone struct {
 	ref       uint64
 	intervals Intervals
 }
-
+// 从目录中读取待删除数据
 func readTombstones(dir string) (TombstoneReader, int64, error) {
 	b, err := ioutil.ReadFile(filepath.Join(dir, tombstoneFilename))
 	if os.IsNotExist(err) {
@@ -144,7 +147,7 @@ func readTombstones(dir string) (TombstoneReader, int64, error) {
 	if len(b) < 5 {
 		return nil, 0, errors.Wrap(encoding.ErrInvalidSize, "tombstones header")
 	}
-
+	// 校验文件头部的编码是否正确
 	d := &encoding.Decbuf{B: b[:len(b)-4]} // 4 for the checksum.
 	if mg := d.Be32(); mg != MagicTombstone {
 		return nil, 0, fmt.Errorf("invalid magic number %x", mg)
@@ -165,7 +168,7 @@ func readTombstones(dir string) (TombstoneReader, int64, error) {
 	if binary.BigEndian.Uint32(b[len(b)-4:]) != hash.Sum32() {
 		return nil, 0, errors.New("checksum did not match")
 	}
-
+	// 新建内存实现
 	stonesMap := newMemTombstones()
 
 	for d.Len() > 0 {
@@ -189,6 +192,7 @@ type memTombstones struct {
 
 // newMemTombstones creates new in memory TombstoneReader
 // that allows adding new intervals.
+// 在内存中创建一个新的读取器
 func newMemTombstones() *memTombstones {
 	return &memTombstones{intvlGroups: make(map[uint64]Intervals)}
 }
@@ -235,10 +239,12 @@ func (*memTombstones) Close() error {
 }
 
 // Interval represents a single time-interval.
+// 单独的时间间隔
 type Interval struct {
 	Mint, Maxt int64
 }
 
+// 校验是否在时间区间内
 func (tr Interval) inBounds(t int64) bool {
 	return t >= tr.Mint && t <= tr.Maxt
 }
