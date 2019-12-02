@@ -117,16 +117,16 @@ func (a *Alert) ResolvedAt(ts time.Time) bool {
 // Manager负责向告警服务分发告警通知
 type Manager struct {
 	queue []*Alert // 告警队列
-	opts  *Options
+	opts  *Options	// 参数设置
 
 	metrics *alertMetrics // 告警指标
 
-	more   chan struct{}
+	more   chan struct{}	// 队列中是否还有告警
 	mtx    sync.RWMutex
 	ctx    context.Context
 	cancel func()
 
-	alertmanagers map[string]*alertmanagerSet
+	alertmanagers map[string]*alertmanagerSet	// 告警管理器，配置文件设置，允许多个
 	logger        log.Logger
 }
 
@@ -136,8 +136,9 @@ type Options struct {
 	ExternalLabels labels.Labels
 	RelabelConfigs []*relabel.Config
 	// Used for sending HTTP requests to the Alertmanager.
+	// 告警发送函数
 	Do func(ctx context.Context, client *http.Client, req *http.Request) (*http.Response, error)
-
+	// metric 注册器
 	Registerer prometheus.Registerer
 }
 
@@ -271,7 +272,7 @@ func (n *Manager) ApplyConfig(conf *config.Config) error {
 	n.opts.RelabelConfigs = conf.AlertingConfig.AlertRelabelConfigs
 
 	amSets := make(map[string]*alertmanagerSet)
-
+	// 允许多个alertmanager共存
 	for _, cfg := range conf.AlertingConfig.AlertmanagerConfigs {
 		ams, err := newAlertmanagerSet(cfg, n.logger)
 		if err != nil {
@@ -292,27 +293,29 @@ func (n *Manager) ApplyConfig(conf *config.Config) error {
 
 	return nil
 }
-
+// 告警数据发送长度
 const maxBatchSize = 64
-
+// 获取告警队列长度
 func (n *Manager) queueLen() int {
 	n.mtx.RLock()
 	defer n.mtx.RUnlock()
 
 	return len(n.queue)
 }
-
+// 获取队列中的一批告警数据
 func (n *Manager) nextBatch() []*Alert {
 	n.mtx.Lock()
 	defer n.mtx.Unlock()
 
 	var alerts []*Alert
-
+	// 以maxBatchSize：64 为临界点进行集合切割
 	if len(n.queue) > maxBatchSize {
 		alerts = append(make([]*Alert, 0, maxBatchSize), n.queue[:maxBatchSize]...)
+		// 告警队列只保留剩余的告警数据
 		n.queue = n.queue[maxBatchSize:]
 	} else {
 		alerts = append(make([]*Alert, 0, len(n.queue)), n.queue...)
+		// 告警队列情况
 		n.queue = n.queue[:0]
 	}
 
@@ -320,7 +323,7 @@ func (n *Manager) nextBatch() []*Alert {
 }
 
 // Run dispatches notifications continuously.
-// 持续运行分发器
+// 持续运行分发器,当配置文件中的配置发生更改时使用，外部川区syncChannel参数
 func (n *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) {
 
 	for {
@@ -331,18 +334,21 @@ func (n *Manager) Run(tsets <-chan map[string][]*targetgroup.Group) {
 			n.reload(ts)
 		case <-n.more:
 		}
+		// 获取一批告警记录
 		alerts := n.nextBatch()
-
+		// 告警记录发送失败？
 		if !n.sendAll(alerts...) {
+			// 发送失败，丢弃当前的告警数据，记录失败条数
 			n.metrics.dropped.Add(float64(len(alerts)))
 		}
 		// If the queue still has items left, kick off the next iteration.
+		// 队列中还存在数据，继续执行发送任务
 		if n.queueLen() > 0 {
 			n.setMore()
 		}
 	}
 }
-
+// 重载,根据discovery传入的参数更新alertmangers
 func (n *Manager) reload(tgs map[string][]*targetgroup.Group) {
 	n.mtx.Lock()
 	defer n.mtx.Unlock()
@@ -359,6 +365,7 @@ func (n *Manager) reload(tgs map[string][]*targetgroup.Group) {
 
 // Send queues the given notification requests for processing.
 // Panics if called on a handler that is not running.
+// 向队列中发送告警数据队列，rule模块外部调用
 func (n *Manager) Send(alerts ...*Alert) {
 	n.mtx.Lock()
 	defer n.mtx.Unlock()
@@ -366,7 +373,7 @@ func (n *Manager) Send(alerts ...*Alert) {
 	// Attach external labels before relabelling and sending.
 	for _, a := range alerts {
 		lb := labels.NewBuilder(a.Labels)
-
+		// alert追加额外的labels
 		for _, l := range n.opts.ExternalLabels {
 			if a.Labels.Get(l.Name) == "" {
 				lb.Set(l.Name, l.Value)
@@ -383,6 +390,7 @@ func (n *Manager) Send(alerts ...*Alert) {
 
 	// Queue capacity should be significantly larger than a single alert
 	// batch could be.
+	// 如果发送的告警队列长度>设置的最大容量，抛弃多余的告警记录
 	if d := len(alerts) - n.opts.QueueCapacity; d > 0 {
 		alerts = alerts[d:]
 
@@ -392,6 +400,7 @@ func (n *Manager) Send(alerts ...*Alert) {
 
 	// If the queue is full, remove the oldest alerts in favor
 	// of newer ones.
+	// 告警数据+队列原有数据>设置的最大容量，抛弃多余的告警记录
 	if d := (len(n.queue) + len(alerts)) - n.opts.QueueCapacity; d > 0 {
 		n.queue = n.queue[d:]
 
@@ -401,6 +410,7 @@ func (n *Manager) Send(alerts ...*Alert) {
 	n.queue = append(n.queue, alerts...)
 
 	// Notify sending goroutine that there are alerts to be processed.
+	// 通过alertmanager处理告警数据
 	n.setMore()
 }
 
@@ -474,16 +484,19 @@ func (n *Manager) sendAll(alerts ...*Alert) bool {
 	// v1Payload and v2Payload represent 'alerts' marshaled for Alertmanager API
 	// v1 or v2. Marshaling happens below. Reference here is for caching between
 	// for loop iterations.
+	// alertmanager的v1和v2 api
 	var v1Payload, v2Payload []byte
 
 	n.mtx.RLock()
+	// alertmanager集合
 	amSets := n.alertmanagers
 	n.mtx.RUnlock()
 
 	var (
 		wg         sync.WaitGroup
-		numSuccess uint64
+		numSuccess uint64	// 成功次数
 	)
+	// 遍历告警集合，向alertmanager发送告警
 	for _, ams := range amSets {
 		var (
 			payload []byte
@@ -491,7 +504,7 @@ func (n *Manager) sendAll(alerts ...*Alert) bool {
 		)
 
 		ams.mtx.RLock()
-
+		// 根据api版本序列化告警数据
 		switch ams.cfg.APIVersion {
 		case config.AlertmanagerAPIVersionV1:
 			{
@@ -508,6 +521,7 @@ func (n *Manager) sendAll(alerts ...*Alert) bool {
 		case config.AlertmanagerAPIVersionV2:
 			{
 				if v2Payload == nil {
+					// 格式化告警数据
 					openAPIAlerts := alertsToOpenAPIAlerts(alerts)
 
 					v2Payload, err = json.Marshal(openAPIAlerts)
@@ -528,20 +542,22 @@ func (n *Manager) sendAll(alerts ...*Alert) bool {
 				return false
 			}
 		}
-
+		// 遍历配置中的alertmanager
 		for _, am := range ams.ams {
 			wg.Add(1)
 
 			ctx, cancel := context.WithTimeout(n.ctx, time.Duration(ams.cfg.Timeout))
 			defer cancel()
-
+			// 协程 发送告警的http请求
 			go func(client *http.Client, url string) {
 				if err := n.sendOne(ctx, client, url, payload); err != nil {
 					level.Error(n.logger).Log("alertmanager", url, "count", len(alerts), "msg", "Error sending alert", "err", err)
 					n.metrics.errors.WithLabelValues(url).Inc()
 				} else {
+					// 发送成功，发送成功次数+1 原子操作
 					atomic.AddUint64(&numSuccess, 1)
 				}
+				// metric设置
 				n.metrics.latency.WithLabelValues(url).Observe(time.Since(begin).Seconds())
 				n.metrics.sent.WithLabelValues(url).Add(float64(len(alerts)))
 
@@ -553,7 +569,7 @@ func (n *Manager) sendAll(alerts ...*Alert) bool {
 	}
 
 	wg.Wait()
-
+	// 一条发送成功则代表当前发送操作执行成功
 	return numSuccess > 0
 }
 
@@ -637,7 +653,7 @@ func (a alertmanagerLabels) url() *url.URL {
 // alertmanagerSet contains a set of Alertmanagers discovered via a group of service
 // discovery definitions that have a common configuration on how alerts should be sent.
 type alertmanagerSet struct {
-	cfg    *config.AlertmanagerConfig
+	cfg    *config.AlertmanagerConfig	// 配置文件设置
 	client *http.Client
 
 	metrics *alertMetrics
@@ -664,6 +680,8 @@ func newAlertmanagerSet(cfg *config.AlertmanagerConfig, logger log.Logger) (*ale
 // sync extracts a deduplicated set of Alertmanager endpoints from a list
 // of target groups definitions.
 // sync从目标组定义列表中提取重复数据删除的Alertmanager端点集。
+// alertmanager中同步targetgroup
+// 参照discovery group的sync逻辑
 func (s *alertmanagerSet) sync(tgs []*targetgroup.Group) {
 	allAms := []alertmanager{}
 	allDroppedAms := []alertmanager{}
@@ -700,7 +718,7 @@ func (s *alertmanagerSet) sync(tgs []*targetgroup.Group) {
 		s.ams = append(s.ams, am)
 	}
 }
-
+// 推送请求的url，POST请求
 func postPath(pre string, v config.AlertmanagerAPIVersion) string {
 	alertPushEndpoint := fmt.Sprintf("/api/%v/alerts", string(v))
 	return path.Join("/", pre, alertPushEndpoint)
