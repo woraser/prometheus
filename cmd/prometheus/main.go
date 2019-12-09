@@ -851,6 +851,7 @@ type sender interface {
 }
 
 // sendAlerts implements the rules.NotifyFunc for a Notifier.
+// 告警发送 实现rules.NotifyFunc接口
 func sendAlerts(s sender, externalURL string) rules.NotifyFunc {
 	return func(ctx context.Context, expr string, alerts ...*rules.Alert) {
 		var res []*notifier.Alert
@@ -871,6 +872,7 @@ func sendAlerts(s sender, externalURL string) rules.NotifyFunc {
 		}
 
 		if len(alerts) > 0 {
+			// 调用notifier中的Send方法，发送告警记录
 			s.Send(res...)
 		}
 	}

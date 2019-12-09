@@ -190,10 +190,13 @@ func EngineQueryFunc(engine *promql.Engine, q storage.Queryable) QueryFunc {
 // A Rule encapsulates a vector expression which is evaluated at a specified
 // interval and acted upon (currently either recorded or used for alerting).
 type Rule interface {
+	// 名称
 	Name() string
 	// Labels of the rule.
+	// rule的labels
 	Labels() labels.Labels
 	// eval evaluates the rule, including any associated recording or alerting actions.
+	// 表达式
 	Eval(context.Context, time.Time, QueryFunc, *url.URL) (promql.Vector, error)
 	// String returns a human-readable string representation of the rule.
 	String() string
@@ -204,10 +207,13 @@ type Rule interface {
 	// SetHealth sets the current health of the rule.
 	SetHealth(RuleHealth)
 	// Health returns the current health of the rule.
+	// 获取rule的实时状态
 	Health() RuleHealth
+	// 设置函数的执行时间
 	SetEvaluationDuration(time.Duration)
 	// GetEvaluationDuration returns last evaluation duration.
 	// NOTE: Used dynamically by rules.html template.
+	// 获取函数的执行时间
 	GetEvaluationDuration() time.Duration
 	SetEvaluationTimestamp(time.Time)
 	// GetEvaluationTimestamp returns last evaluation timestamp.
@@ -514,7 +520,7 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 			return
 		default:
 		}
-
+		// 采集函数
 		func(i int, rule Rule) {
 			sp, ctx := opentracing.StartSpanFromContext(ctx, "rule")
 			sp.SetTag("name", rule.Name())
@@ -530,6 +536,7 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 			g.metrics.evalTotal.Inc()
 			// rule metric执行结果
 			// alert rule对应 alerting.go 中的Eval()函数
+			// vector：promql表达式的结果集
 			vector, err := rule.Eval(ctx, ts, g.opts.QueryFunc, g.opts.ExternalURL)
 			if err != nil {
 				// 出错返回
@@ -559,7 +566,7 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 			seriesReturned := make(map[string]labels.Labels, len(g.seriesInPreviousEval[i]))
 			// 处理查询结果
 			for _, s := range vector {
-				// 写入器中添加查询结果
+				// 存储写入器中添加查询结果
 				if _, err := app.Add(s.Metric, s.T, s.V); err != nil {
 					switch err {
 					case storage.ErrOutOfOrderSample:
@@ -606,7 +613,7 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 			}
 		}(i, rule)
 	}
-	// 处理失效使series
+	// 处理失效series
 	if len(g.staleSeries) != 0 {
 		app, err := g.opts.Appendable.Appender()
 		if err != nil {
