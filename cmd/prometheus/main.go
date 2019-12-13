@@ -464,6 +464,7 @@ func main() {
 		},
 		func(cfg *config.Config) error {
 			// Get all rule files matching the configuration paths.
+			// 获取rule files
 			var files []string
 			for _, pat := range cfg.RuleFiles {
 				fs, err := filepath.Glob(pat)
@@ -473,6 +474,7 @@ func main() {
 				}
 				files = append(files, fs...)
 			}
+			// 为ruleManager应用rule files
 			return ruleManager.Update(
 				time.Duration(cfg.GlobalConfig.EvaluationInterval),
 				files,
@@ -654,14 +656,14 @@ func main() {
 		)
 	}
 	{
-		// Rule manager.规则管理
+		// Rule manager.处理设置的rule 包括record rule和alert rule
 		// TODO(krasi) refactor ruleManager.Run() to be blocking to avoid using an extra blocking channel.
 		// 重构ruleManager.Run（）以阻止使用额外的阻塞通道
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
 				<-reloadReady.C
-				// 解除block阻塞启动规则模块
+				// 解除block阻塞以启动规则模块
 				ruleManager.Run()
 				<-cancel
 				return nil

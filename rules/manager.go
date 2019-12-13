@@ -42,6 +42,7 @@ import (
 type RuleHealth string
 
 // The possible health states of a rule based on the last execution.
+// 基于上次执行的规则的可能健康状态。
 const (
 	HealthUnknown RuleHealth = "unknown"
 	HealthGood    RuleHealth = "ok"
@@ -49,6 +50,7 @@ const (
 )
 
 // Constants for instrumentation.
+// 默认的namespace
 const namespace = "prometheus"
 
 var (
@@ -61,6 +63,7 @@ var (
 )
 
 // Metrics for rule evaluation.
+// 每次规则执行需要的metrics
 type Metrics struct {
 	evalDuration        prometheus.Summary
 	evalFailures        prometheus.Counter
@@ -157,12 +160,13 @@ func NewGroupMetrics(reg prometheus.Registerer) *Metrics {
 }
 
 // QueryFunc processes PromQL queries.
+// 查询方法
 type QueryFunc func(ctx context.Context, q string, t time.Time) (promql.Vector, error)
 
 // EngineQueryFunc returns a new query function that executes instant queries against
 // the given engine.
 // It converts scalar into vector results.
-// 存储引擎查询方法
+// 存储引擎查询方法 返回查询方法
 func EngineQueryFunc(engine *promql.Engine, q storage.Queryable) QueryFunc {
 	return func(ctx context.Context, qs string, t time.Time) (promql.Vector, error) {
 		q, err := engine.NewInstantQuery(q, qs, t)
@@ -193,7 +197,7 @@ type Rule interface {
 	// 名称
 	Name() string
 	// Labels of the rule.
-	// rule的labels
+	// rule的labels 需要新增或者覆盖的labels
 	Labels() labels.Labels
 	// eval evaluates the rule, including any associated recording or alerting actions.
 	// 表达式
@@ -227,10 +231,10 @@ type Rule interface {
 // Group is a set of rules that have a logical relation.
 // 一组有逻辑关系的规则
 type Group struct {
-	name                 string
-	file                 string
-	interval             time.Duration
-	rules                []Rule
+	name                 string	// group name 唯一
+	file                 string	 //文件地址
+	interval             time.Duration	// 运行间隔
+	rules                []Rule	// 定义的规则列表
 	seriesInPreviousEval []map[string]labels.Labels // One per Rule.
 	staleSeries          []labels.Labels
 	opts                 *ManagerOptions
@@ -285,7 +289,7 @@ func (g *Group) Rules() []Rule { return g.rules }
 
 // Interval returns the group's interval.
 func (g *Group) Interval() time.Duration { return g.interval }
-
+// group 运行函数
 func (g *Group) run(ctx context.Context) {
 	defer close(g.terminated)
 
@@ -297,12 +301,13 @@ func (g *Group) run(ctx context.Context) {
 	case <-g.done:
 		return
 	}
-
+	// rule执行函数
 	iter := func() {
 		// 迭代次数+1
 		g.metrics.iterationsScheduled.Inc()
 
 		start := time.Now()
+		// 执行group中的规则
 		g.Eval(ctx, evalTimestamp)
 		// 耗时
 		timeSinceStart := time.Since(start)
@@ -511,7 +516,7 @@ func (g *Group) CopyState(from *Group) {
 }
 
 // Eval runs a single evaluation cycle in which all rules are evaluated sequentially.
-// 所有rules的一个执行周期
+// 执行group中rules的一个执行周期
 func (g *Group) Eval(ctx context.Context, ts time.Time) {
 	// 依次处理每个rule
 	for i, rule := range g.rules {
@@ -536,7 +541,7 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 			g.metrics.evalTotal.Inc()
 			// rule metric执行结果
 			// alert rule对应 alerting.go 中的Eval()函数
-			// vector：promql表达式的结果集
+			// vector：promql表达式的查询结果集和
 			vector, err := rule.Eval(ctx, ts, g.opts.QueryFunc, g.opts.ExternalURL)
 			if err != nil {
 				// 出错返回
@@ -548,26 +553,30 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 				g.metrics.evalFailures.Inc()
 				return
 			}
-			// 如果是告警规则，发送告警信息
+			// 进行类型强转，如果是告警规则，发送告警信息，
 			if ar, ok := rule.(*AlertingRule); ok {
+				// 发送告警规则给配置的alertmanager
 				ar.sendAlerts(ctx, ts, g.opts.ResendDelay, g.interval, g.opts.NotifyFunc)
 			}
 			var (
+				// 乱序数量
 				numOutOfOrder = 0
+				// 重复数量
 				numDuplicates = 0
 			)
-			// 获得写入管理器/缓冲器
+			// 获得写入管理器/缓冲器 tsdb remoteStorage
 			app, err := g.opts.Appendable.Appender()
 			if err != nil {
 				level.Warn(g.logger).Log("msg", "creating appender failed", "err", err)
 				return
 			}
-
+			// 成功写入的数据集合
 			seriesReturned := make(map[string]labels.Labels, len(g.seriesInPreviousEval[i]))
-			// 处理查询结果
+			// 处理查询结果集合
 			for _, s := range vector {
 				// 存储写入器中添加查询结果
 				if _, err := app.Add(s.Metric, s.T, s.V); err != nil {
+					// handle error
 					switch err {
 					case storage.ErrOutOfOrderSample:
 						numOutOfOrder++
@@ -579,7 +588,8 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 						level.Warn(g.logger).Log("msg", "Rule evaluation result discarded", "err", err, "sample", s)
 					}
 				} else {
-					// 记录返回组
+					// 记录成功写入的数据metric
+					// 没报错就代表写入成功
 					seriesReturned[s.Metric.String()] = s.Metric
 				}
 			}
@@ -623,6 +633,7 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 		// series失效
 		for _, s := range g.staleSeries {
 			// Rule that produced series no longer configured, mark it stale.
+			// 若rule没有配置，使之失效
 			_, err = app.Add(s, timestamp.FromTime(ts), math.Float64frombits(value.StaleNaN))
 			switch err {
 			case nil:
@@ -644,6 +655,7 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 
 // RestoreForState restores the 'for' state of the alerts
 // by looking up last ActiveAt from storage.
+// TODO 恢复for状态？
 func (g *Group) RestoreForState(ts time.Time) {
 	maxtMS := int64(model.TimeFromUnixNano(ts.UnixNano()))
 	// We allow restoration only if alerts were active before after certain time.
@@ -771,6 +783,7 @@ func (g *Group) RestoreForState(ts time.Time) {
 }
 
 // The Manager manages recording and alerting rules.
+// rule管理器
 type Manager struct {
 	opts     *ManagerOptions
 	groups   map[string]*Group
@@ -782,11 +795,13 @@ type Manager struct {
 }
 
 // Appendable returns an Appender.
+// 对存储器appender的上层封装接口
 type Appendable interface {
 	Appender() (storage.Appender, error)
 }
 
 // NotifyFunc sends notifications about a set of alerts generated by the given expression.
+// 发送告警通知
 type NotifyFunc func(ctx context.Context, expr string, alerts ...*Alert)
 
 // ManagerOptions bundles options for the Manager.
@@ -829,11 +844,13 @@ func NewManager(o *ManagerOptions) *Manager {
 }
 
 // Run starts processing of the rule manager.
+//关闭阻塞channel 以启动
 func (m *Manager) Run() {
 	close(m.block)
 }
 
 // Stop the rule manager's rule evaluation cycles.
+// 关闭manager
 func (m *Manager) Stop() {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
@@ -849,10 +866,11 @@ func (m *Manager) Stop() {
 
 // Update the rule manager's state as the config requires. If
 // loading the new rules failed the old rule set is restored.
+// 根据配置文件 更新rule manager，若更新失败，则回滚旧配置
 func (m *Manager) Update(interval time.Duration, files []string, externalLabels labels.Labels) error {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
-
+	// 加载配置文件中的groups(group name 唯一)
 	groups, errs := m.LoadGroups(interval, externalLabels, files...)
 	if errs != nil {
 		for _, e := range errs {
@@ -863,14 +881,16 @@ func (m *Manager) Update(interval time.Duration, files []string, externalLabels 
 	m.restored = true
 
 	var wg sync.WaitGroup
-
+	// 处理group
 	for _, newg := range groups {
 		wg.Add(1)
 
 		// If there is an old group with the same identifier, stop it and wait for
 		// it to finish the current iteration. Then copy it into the new group.
+		// 若存在相同的group 等待其暂停 并且替换为新的group
 		gn := groupKey(newg.name, newg.file)
 		oldg, ok := m.groups[gn]
+		// 删除old group
 		delete(m.groups, gn)
 
 		go func(newg *Group) {
@@ -883,6 +903,7 @@ func (m *Manager) Update(interval time.Duration, files []string, externalLabels 
 				// is told to run. This is necessary to avoid running
 				// queries against a bootstrapping storage.
 				<-m.block
+				// 运行 group主函数 周期性执行rule运算
 				newg.run(m.opts.Context)
 			}()
 			wg.Done()
@@ -891,6 +912,7 @@ func (m *Manager) Update(interval time.Duration, files []string, externalLabels 
 
 	// Stop remaining old groups.
 	for _, oldg := range m.groups {
+		// 关闭过期的group run()函数
 		oldg.stop()
 	}
 
@@ -956,11 +978,13 @@ func (m *Manager) LoadGroups(
 }
 
 // Group names need not be unique across filenames.
+// 获取group的uid
 func groupKey(name, file string) string {
 	return name + ";" + file
 }
 
 // RuleGroups returns the list of manager's rule groups.
+// 获取manager的group list
 func (m *Manager) RuleGroups() []*Group {
 	m.mtx.RLock()
 	defer m.mtx.RUnlock()
@@ -994,6 +1018,7 @@ func (m *Manager) Rules() []Rule {
 }
 
 // AlertingRules returns the list of the manager's alerting rules.
+// 获取告警记录
 func (m *Manager) AlertingRules() []*AlertingRule {
 	m.mtx.RLock()
 	defer m.mtx.RUnlock()

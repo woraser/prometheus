@@ -12,7 +12,7 @@
     main函数调用run()时才解除block
     
 2. Group    
-    group = rule group
+    group = rule group，规则组，必须唯一
     
 3. Rule
     rule分为recording rule and alert rule。每个类型都有对应的执行函数eval()
@@ -23,7 +23,10 @@
 5. staleSeries
     没理解，下次补充
     
+6. Record rule
+    预处理规则，针对大批量数据进行预处理，可以有效的减少实时运算量。
     
-    
+7. Alert rule
+    告警规则。负责rule表达式的告警将通过http发送到配置的alertManager中。    
 
 
