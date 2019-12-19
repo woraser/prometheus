@@ -157,6 +157,42 @@ func (m *Manager) reload() {
 	wg.Wait()
 }
 
+
+// 核心函数，重载scrape
+func (m *Manager) AddExtraScrape(sc *config.ScrapeConfig, ts map[string][]*targetgroup.Group) error{
+	m.mtxScrape.Lock()
+	var wg sync.WaitGroup
+
+	for setName, groups := range ts {
+		// 构造采集pool
+
+		if _, ok := m.scrapePools[setName]; !ok {
+			// 创建新的scrapePool
+			// scrapeConfig is custom
+			sp, err := newScrapePool(sc, m.append, m.jitterSeed, log.With(m.logger, "scrape_pool", setName))
+			if err != nil {
+				level.Error(m.logger).Log("msg", "error creating new scrape pool", "err", err, "scrape_pool", setName)
+				continue
+			}
+			m.scrapePools[setName] = sp
+		}
+
+		wg.Add(1)
+		// Run the sync in parallel as these take a while and at high load can't catch up.
+		// 并行运行同步，因为这些需要一段时间，高负载无法赶上。
+		// 异步更新pool，执行pool中的采集任务
+		go func(sp *scrapePool, groups []*targetgroup.Group) {
+			// 更新sp中的targets
+			sp.Sync(groups)
+			wg.Done()
+		}(m.scrapePools[setName], groups)
+
+	}
+	m.mtxScrape.Unlock()
+	wg.Wait()
+	return nil
+}
+
 // setJitterSeed calculates a global jitterSeed per server relying on extra label set.
 func (m *Manager) setJitterSeed(labels labels.Labels) error {
 	h := fnv.New64a()

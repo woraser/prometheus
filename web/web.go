@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/prometheus/prometheus/discovery/targetgroup"
 	"io"
 	"io/ioutil"
 	stdlog "log"
@@ -323,6 +324,9 @@ func New(logger log.Logger, o *Options) *Handler {
 	router.Get("/targets", readyf(h.targets))
 	router.Get("/version", readyf(h.version))
 	router.Get("/service-discovery", readyf(h.serviceDiscovery))
+
+	// User Custom
+	router.Post("/scrape_job", readyf(h.scrapeJob))
 
 	router.Get("/metrics", promhttp.Handler().ServeHTTP)
 
@@ -977,6 +981,77 @@ func (h *Handler) executeTemplate(w http.ResponseWriter, name string, data inter
 		return
 	}
 	io.WriteString(w, result)
+}
+
+
+// Export fields for Scrape.
+// See detail:config.scrapeConfig
+type ExportScrape struct {
+	JobName string `json:"job_name"`
+
+	HonorLabels bool `json:"honor_labels"`
+
+	HonorTimestamps bool `json:"honor_timestamps"`
+
+	Params url.Values `json:"params"`
+
+	ScrapeInterval model.Duration `json:"scrape_interval"`
+
+	ScrapeTimeout model.Duration `json:"scrape_timeout"`
+
+	MetricsPath string `json:"metrics_path"`
+
+	Scheme string `json:"scheme"`
+
+	SampleLimit uint `json:"sample_limit"`
+	
+	Targets []string `json:"targets"`
+}
+
+
+func (es *ExportScrape) refactorConfig() (*config.ScrapeConfig, map[string][]*targetgroup.Group) {
+	sc := &config.ScrapeConfig{
+		JobName: es.JobName,
+		MetricsPath: es.MetricsPath,
+		Params: es.Params,
+		Scheme: es.Scheme,
+		HonorTimestamps: es.HonorTimestamps,
+		ScrapeInterval: model.Duration(5 * time.Second),
+		ScrapeTimeout: model.Duration(5 * time.Second),
+	}
+	groups := make([]*targetgroup.Group, 0, 0)
+	trs := model.LabelSet{
+		"__address__": "127.0.0.1:9115",
+	}
+	tgs := []model.LabelSet{trs}
+
+	g := &targetgroup.Group{
+		Targets: tgs,
+		Labels: nil,
+		Source: "0",
+
+	}
+	mt := make(map[string][]*targetgroup.Group)
+	mt[es.JobName] = append(groups, g)
+	return sc, mt
+}
+
+func (h *Handler) scrapeJob(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("scrapeJob begin")
+
+	decoder,_ := ioutil.ReadAll(r.Body)
+	var t ExportScrape
+	err := json.Unmarshal(decoder,&t)
+	if err != nil {
+		fmt.Println("decode error:",err)
+	}
+	scrapeCf, scrapeTs := t.refactorConfig()
+	h.scrapeManager.AddExtraScrape(scrapeCf,scrapeTs)
+	fmt.Println("obj123:",scrapeCf)
+	dec := json.NewEncoder(w)
+	if err := dec.Encode(h.versionInfo); err != nil {
+		http.Error(w, fmt.Sprintf("error encoding JSON: %s", err), http.StatusInternalServerError)
+	}
 }
 
 // AlertStatus bundles alerting rules and the mapping of alert states to row classes.
