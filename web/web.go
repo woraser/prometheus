@@ -327,6 +327,7 @@ func New(logger log.Logger, o *Options) *Handler {
 
 	// User Custom
 	router.Post("/scrape_job", readyf(h.scrapeJob))
+	router.Get("/scrape_list", readyf(h.listScrapeNames))
 
 	router.Get("/metrics", promhttp.Handler().ServeHTTP)
 
@@ -983,7 +984,6 @@ func (h *Handler) executeTemplate(w http.ResponseWriter, name string, data inter
 	io.WriteString(w, result)
 }
 
-
 // Export fields for Scrape.
 // See detail:config.scrapeConfig
 type ExportScrape struct {
@@ -995,9 +995,9 @@ type ExportScrape struct {
 
 	Params url.Values `json:"params"`
 
-	ScrapeInterval model.Duration `json:"scrape_interval"`
+	ScrapeInterval string `json:"scrape_interval"`
 
-	ScrapeTimeout model.Duration `json:"scrape_timeout"`
+	ScrapeTimeout string `json:"scrape_timeout"`
 
 	MetricsPath string `json:"metrics_path"`
 
@@ -1008,8 +1008,7 @@ type ExportScrape struct {
 	Targets []string `json:"targets"`
 }
 
-
-func (es *ExportScrape) refactorConfig() (*config.ScrapeConfig, map[string][]*targetgroup.Group) {
+func (es *ExportScrape) refactorConfig() (*config.ScrapeConfig, map[string][]*targetgroup.Group, error) {
 	sc := &config.ScrapeConfig{
 		JobName: es.JobName,
 		MetricsPath: es.MetricsPath,
@@ -1019,6 +1018,22 @@ func (es *ExportScrape) refactorConfig() (*config.ScrapeConfig, map[string][]*ta
 		ScrapeInterval: model.Duration(5 * time.Second),
 		ScrapeTimeout: model.Duration(5 * time.Second),
 	}
+	if es.ScrapeInterval != "" {
+		sInterval ,err := model.ParseDuration(es.ScrapeInterval)
+		if err != nil {
+			return  nil, nil, errors.Errorf("ScrapeInterval format error:",err.Error())
+		}
+		sc.ScrapeInterval = sInterval
+	}
+
+	if es.ScrapeTimeout != "" {
+		sTimeout ,err := model.ParseDuration(es.ScrapeInterval)
+		if err != nil {
+			return  nil, nil, errors.Errorf("ScrapeTimeout format error:",err.Error())
+		}
+		sc.ScrapeTimeout = sTimeout
+	}
+
 	groups := make([]*targetgroup.Group, 0, 0)
 	trs := model.LabelSet{
 		"__address__": "127.0.0.1:9115",
@@ -1033,23 +1048,47 @@ func (es *ExportScrape) refactorConfig() (*config.ScrapeConfig, map[string][]*ta
 	}
 	mt := make(map[string][]*targetgroup.Group)
 	mt[es.JobName] = append(groups, g)
-	return sc, mt
+	return sc, mt, nil
 }
 
+func buildTargetGroup(targets []string){
+	//for t := range targets {
+	//
+	//}
+
+}
+
+// Add scrape job
+// Return scrapePool name list
 func (h *Handler) scrapeJob(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("scrapeJob begin")
 
 	decoder,_ := ioutil.ReadAll(r.Body)
 	var t ExportScrape
 	err := json.Unmarshal(decoder,&t)
 	if err != nil {
-		fmt.Println("decode error:",err)
+		level.Error(h.logger).Log("error", "Error decoding JSON", "error msg:", err)
+		http.Error(w, fmt.Sprintf("Error decoding JSON: %s", err), http.StatusInternalServerError)
 	}
-	scrapeCf, scrapeTs := t.refactorConfig()
+	// convert body to config
+	scrapeCf, scrapeTs, err := t.refactorConfig()
+	if err != nil {
+		level.Error(h.logger).Log("error", "Refactor to Config error", "error msg:", err)
+		http.Error(w, fmt.Sprintf("Refactor to Config error: %s", err), http.StatusInternalServerError)
+	}
+	// add job to scrapeManager
 	h.scrapeManager.AddExtraScrape(scrapeCf,scrapeTs)
-	fmt.Println("obj123:",scrapeCf)
+	// return response
 	dec := json.NewEncoder(w)
-	if err := dec.Encode(h.versionInfo); err != nil {
+	if err := dec.Encode(h.scrapeManager.GetScrapePoolNames()); err != nil {
+		level.Error(h.logger).Log("error", "error encoding JSON", "error msg:", err)
+		http.Error(w, fmt.Sprintf("error encoding JSON: %s", err), http.StatusInternalServerError)
+	}
+}
+
+func (h *Handler) listScrapeNames(w http.ResponseWriter, r *http.Request) {
+	dec := json.NewEncoder(w)
+	if err := dec.Encode(h.scrapeManager.GetScrapePoolNames()); err != nil {
+		level.Error(h.logger).Log("error", "error encoding JSON", "error msg:", err)
 		http.Error(w, fmt.Sprintf("error encoding JSON: %s", err), http.StatusInternalServerError)
 	}
 }
@@ -1059,3 +1098,4 @@ type AlertStatus struct {
 	Groups               []*rules.Group
 	AlertStateToRowClass map[rules.AlertState]string
 }
+

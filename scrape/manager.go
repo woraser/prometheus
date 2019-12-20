@@ -157,8 +157,8 @@ func (m *Manager) reload() {
 	wg.Wait()
 }
 
-
-// 核心函数，重载scrape
+//
+//
 func (m *Manager) AddExtraScrape(sc *config.ScrapeConfig, ts map[string][]*targetgroup.Group) error{
 	m.mtxScrape.Lock()
 	var wg sync.WaitGroup
@@ -191,6 +191,16 @@ func (m *Manager) AddExtraScrape(sc *config.ScrapeConfig, ts map[string][]*targe
 	m.mtxScrape.Unlock()
 	wg.Wait()
 	return nil
+}
+
+// Get pool name list from scrapeManager
+// Includes additional jobs
+func (m *Manager) GetScrapePoolNames() []string {
+	list := make([]string, 0, len(m.scrapePools))
+	for k := range m.scrapePools {
+		list = append(list, k)
+	}
+	return list
 }
 
 // setJitterSeed calculates a global jitterSeed per server relying on extra label set.
