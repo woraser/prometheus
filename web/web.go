@@ -329,6 +329,7 @@ func New(logger log.Logger, o *Options) *Handler {
 	// User Custom
 	router.Post("/scrape_job", readyf(h.scrapeJob))
 	router.Get("/scrape_list", readyf(h.listScrapeNames))
+	router.Del("/scrape_job/*job_name", readyf(h.delScrapeName))
 
 	router.Get("/metrics", promhttp.Handler().ServeHTTP)
 
@@ -1154,6 +1155,19 @@ func (h *Handler) listScrapeNames(w http.ResponseWriter, r *http.Request) {
 	if err := dec.Encode(h.scrapeManager.GetScrapePoolNames()); err != nil {
 		level.Error(h.logger).Log("error", "error encoding JSON", "error msg:", err)
 		http.Error(w, fmt.Sprintf("error encoding JSON: %s", err), http.StatusInternalServerError)
+	}
+}
+
+func (h *Handler) delScrapeName(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	jobName := route.Param(ctx, "job_name")
+	if len(jobName) > 0 {
+		jobName = jobName[1:]
+	}
+	dec := json.NewEncoder(w)
+	if err := dec.Encode(h.scrapeManager.StopScrapePool(jobName)); err != nil {
+		level.Error(h.logger).Log("error", "error del job ", "error msg:", err)
+		http.Error(w, fmt.Sprintf("error del job: %s", err), http.StatusInternalServerError)
 	}
 }
 

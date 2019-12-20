@@ -48,6 +48,7 @@ func NewManager(logger log.Logger, app Appendable) *Manager {
 		append:        app,
 		logger:        logger,
 		scrapeConfigs: make(map[string]*config.ScrapeConfig),
+		extraScrapePools: make(map[string]*scrapePool),
 		scrapePools:   make(map[string]*scrapePool),
 		graceShut:     make(chan struct{}),
 		triggerReload: make(chan struct{}, 1),
@@ -65,6 +66,7 @@ type Manager struct {
 	mtxScrape     sync.Mutex // Guards the fields below.
 	scrapeConfigs map[string]*config.ScrapeConfig	// scrape配置文件字典
 	scrapePools   map[string]*scrapePool	// scrapepool 字典
+	extraScrapePools   map[string]*scrapePool	// extra scrapepool 字典
 	targetSets    map[string][]*targetgroup.Group
 
 	triggerReload chan struct{}
@@ -166,15 +168,15 @@ func (m *Manager) AddExtraScrape(sc *config.ScrapeConfig, ts map[string][]*targe
 	for setName, groups := range ts {
 		// 构造采集pool
 
-		if _, ok := m.scrapePools[setName]; !ok {
+		if _, ok := m.extraScrapePools[setName]; !ok {
 			// 创建新的scrapePool
 			// scrapeConfig is custom
-			sp, err := newScrapePool(sc, m.append, m.jitterSeed, log.With(m.logger, "scrape_pool", setName))
+			sp, err := newScrapePool(sc, m.append, m.jitterSeed, log.With(m.logger, "extra_scrape_pool", setName))
 			if err != nil {
-				level.Error(m.logger).Log("msg", "error creating new scrape pool", "err", err, "scrape_pool", setName)
+				level.Error(m.logger).Log("msg", "error creating new extra scrape pool", "err", err, "extra_scrape_pool", setName)
 				continue
 			}
-			m.scrapePools[setName] = sp
+			m.extraScrapePools[setName] = sp
 		}
 
 		wg.Add(1)
@@ -185,7 +187,7 @@ func (m *Manager) AddExtraScrape(sc *config.ScrapeConfig, ts map[string][]*targe
 			// 更新sp中的targets
 			sp.Sync(groups)
 			wg.Done()
-		}(m.scrapePools[setName], groups)
+		}(m.extraScrapePools[setName], groups)
 
 	}
 	m.mtxScrape.Unlock()
@@ -193,14 +195,36 @@ func (m *Manager) AddExtraScrape(sc *config.ScrapeConfig, ts map[string][]*targe
 	return nil
 }
 
+
 // Get pool name list from scrapeManager
 // Includes additional jobs
-func (m *Manager) GetScrapePoolNames() []string {
-	list := make([]string, 0, len(m.scrapePools))
-	for k := range m.scrapePools {
-		list = append(list, k)
+func (m *Manager) StopScrapePool(name string) error {
+
+	sp,ok := m.extraScrapePools[name]
+	if !ok {
+		return errors.New("Cannot find this job in extraScrapePools")
 	}
-	return list
+	sp.stop()
+	delete(m.extraScrapePools, name)
+	return nil
+}
+
+// Get pool name list from scrapeManager
+// Includes additional jobs
+func (m *Manager) GetScrapePoolNames() map[string][]string {
+	res := make(map[string][]string)
+
+	original := make([]string, 0, len(m.scrapePools))
+	for k := range m.scrapePools {
+		original = append(original, k)
+	}
+	res["original"] = original
+	extra := make([]string, 0, len(m.extraScrapePools))
+	for k := range m.extraScrapePools {
+		extra = append(extra, k)
+	}
+	res["extra"] = extra
+	return res
 }
 
 // setJitterSeed calculates a global jitterSeed per server relying on extra label set.
@@ -284,6 +308,9 @@ func (m *Manager) TargetsAll() map[string][]*Target {
 	for tset, sp := range m.scrapePools {
 		targets[tset] = append(sp.ActiveTargets(), sp.DroppedTargets()...)
 	}
+	for tset, sp := range m.extraScrapePools {
+		targets[tset] = append(sp.ActiveTargets(), sp.DroppedTargets()...)
+	}
 	return targets
 }
 
@@ -297,9 +324,20 @@ func (m *Manager) TargetsActive() map[string][]*Target {
 		mtx sync.Mutex
 	)
 
-	targets := make(map[string][]*Target, len(m.scrapePools))
+	targets := make(map[string][]*Target, len(m.scrapePools) + len(m.extraScrapePools))
 	wg.Add(len(m.scrapePools))
+	wg.Add(len(m.extraScrapePools))
 	for tset, sp := range m.scrapePools {
+		// Running in parallel limits the blocking time of scrapePool to scrape
+		// interval when there's an update from SD.
+		go func(tset string, sp *scrapePool) {
+			mtx.Lock()
+			targets[tset] = sp.ActiveTargets()
+			mtx.Unlock()
+			wg.Done()
+		}(tset, sp)
+	}
+	for tset, sp := range m.extraScrapePools {
 		// Running in parallel limits the blocking time of scrapePool to scrape
 		// interval when there's an update from SD.
 		go func(tset string, sp *scrapePool) {
