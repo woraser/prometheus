@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
+	"github.com/prometheus/prometheus/pkg/relabel"
 	"io"
 	"io/ioutil"
 	stdlog "log"
@@ -1006,7 +1007,29 @@ type ExportScrape struct {
 	SampleLimit uint `json:"sample_limit"`
 	
 	Targets []string `json:"targets"`
+
+	// List of target extra relabel configurations. except Regex
+	RelabelConfigs []*ExportRelabelConfig `json:"relabel_configs"`
+	// List of metric extra relabel configurations. except Regex
+	MetricRelabelConfigs []*ExportRelabelConfig `json:"metric_relabel_configs"`
 }
+
+// Simplified data structure
+// more detail：relable.config
+type ExportRelabelConfig struct {
+	SourceLabels []string `json:"source_labels"`
+
+	Modulus uint64 `json:"modulus"`
+
+	TargetLabel string `json:"target_label"`
+
+	Replacement string `json:"replacement"`
+
+	Action relabel.Action `json:"action"`
+
+	Separator string `json:"separator"`
+}
+
 
 func (es *ExportScrape) refactorConfig() (*config.ScrapeConfig, map[string][]*targetgroup.Group, error) {
 	sc := &config.ScrapeConfig{
@@ -1017,6 +1040,8 @@ func (es *ExportScrape) refactorConfig() (*config.ScrapeConfig, map[string][]*ta
 		HonorTimestamps: es.HonorTimestamps,
 		ScrapeInterval: model.Duration(5 * time.Second),
 		ScrapeTimeout: model.Duration(5 * time.Second),
+		MetricRelabelConfigs: nil,
+		RelabelConfigs: nil,
 	}
 	if es.ScrapeInterval != "" {
 		sInterval ,err := model.ParseDuration(es.ScrapeInterval)
@@ -1033,29 +1058,65 @@ func (es *ExportScrape) refactorConfig() (*config.ScrapeConfig, map[string][]*ta
 		}
 		sc.ScrapeTimeout = sTimeout
 	}
-
-	groups := make([]*targetgroup.Group, 0, 0)
-	trs := model.LabelSet{
-		"__address__": "127.0.0.1:9115",
+	// rebuild relabel.config
+	if len(es.RelabelConfigs) > 0 {
+		relabelConfigs := buildRelabelConfigs(es.RelabelConfigs)
+		sc.RelabelConfigs = relabelConfigs
 	}
-	tgs := []model.LabelSet{trs}
+	if len(es.MetricRelabelConfigs) > 0 {
+		metricConfigs := buildRelabelConfigs(es.MetricRelabelConfigs)
+		sc.MetricRelabelConfigs = metricConfigs
+	}
+	// build scrape target group
+	mt := buildTargetGroup(es.JobName, es.Targets)
+	return sc, mt, nil
+}
 
+func buildTargetGroup(jobName string, targets []string) map[string][]*targetgroup.Group {
+	mt := make(map[string][]*targetgroup.Group)
+	groups := make([]*targetgroup.Group, 0, 5)
+	tgs := make([]model.LabelSet, 0, len(targets))
+
+	for _,val := range targets {
+		trs := model.LabelSet{
+			"__address__": model.LabelValue(val),
+		}
+		tgs = append(tgs, trs)
+	}
 	g := &targetgroup.Group{
 		Targets: tgs,
 		Labels: nil,
 		Source: "0",
-
 	}
-	mt := make(map[string][]*targetgroup.Group)
-	mt[es.JobName] = append(groups, g)
-	return sc, mt, nil
+	mt[jobName] = append(groups, g)
+	return mt
 }
 
-func buildTargetGroup(targets []string){
-	//for t := range targets {
-	//
-	//}
+func buildRelabelConfigs(er []*ExportRelabelConfig) []*relabel.Config {
+	configList := make([]*relabel.Config, 0, len(er))
+	for _, val := range er {
+		defaultRc := relabel.DefaultRelabelConfig
+		sourceNames := make([]model.LabelName, 0)
+		for _, v := range val.SourceLabels {
+			sourceNames = append(sourceNames, model.LabelName(v))
+		}
 
+		defaultRc.SourceLabels = sourceNames
+		defaultRc.TargetLabel = val.TargetLabel
+		defaultRc.Modulus = val.Modulus
+		if val.Separator != "" {
+			defaultRc.Separator = val.Separator
+		}
+		if val.Action != "" {
+			defaultRc.Action = val.Action
+		}
+		if val.Replacement != "" {
+			defaultRc.Replacement = val.Replacement
+		}
+
+		configList = append(configList, &defaultRc)
+	}
+	return configList
 }
 
 // Add scrape job
@@ -1068,12 +1129,14 @@ func (h *Handler) scrapeJob(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		level.Error(h.logger).Log("error", "Error decoding JSON", "error msg:", err)
 		http.Error(w, fmt.Sprintf("Error decoding JSON: %s", err), http.StatusInternalServerError)
+		return
 	}
 	// convert body to config
 	scrapeCf, scrapeTs, err := t.refactorConfig()
 	if err != nil {
 		level.Error(h.logger).Log("error", "Refactor to Config error", "error msg:", err)
 		http.Error(w, fmt.Sprintf("Refactor to Config error: %s", err), http.StatusInternalServerError)
+		return
 	}
 	// add job to scrapeManager
 	h.scrapeManager.AddExtraScrape(scrapeCf,scrapeTs)
@@ -1082,6 +1145,7 @@ func (h *Handler) scrapeJob(w http.ResponseWriter, r *http.Request) {
 	if err := dec.Encode(h.scrapeManager.GetScrapePoolNames()); err != nil {
 		level.Error(h.logger).Log("error", "error encoding JSON", "error msg:", err)
 		http.Error(w, fmt.Sprintf("error encoding JSON: %s", err), http.StatusInternalServerError)
+		return
 	}
 }
 
