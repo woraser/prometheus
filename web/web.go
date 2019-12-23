@@ -1161,13 +1161,17 @@ func (h *Handler) listScrapeNames(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) delScrapeName(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	jobName := route.Param(ctx, "job_name")
-	if len(jobName) > 0 {
-		jobName = jobName[1:]
+	if len(jobName) == 0 {
+		level.Error(h.logger).Log("error", "failed del job ", "error msg:", errors.New("jo name is nil"))
+		http.Error(w, fmt.Sprintf("failed del job: %s", errors.New("jo name is nil")), http.StatusInternalServerError)
+		return
 	}
-	dec := json.NewEncoder(w)
-	if err := dec.Encode(h.scrapeManager.StopScrapePool(jobName)); err != nil {
-		level.Error(h.logger).Log("error", "error del job ", "error msg:", err)
-		http.Error(w, fmt.Sprintf("error del job: %s", err), http.StatusInternalServerError)
+	jobName = jobName[1:]
+	err := h.scrapeManager.StopScrapePool(jobName)
+	if err != nil {
+		level.Error(h.logger).Log("error", "failed del job ", "error msg:", err)
+		http.Error(w, fmt.Sprintf("failed del job: %s", err), http.StatusInternalServerError)
+		return
 	}
 }
 
