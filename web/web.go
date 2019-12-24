@@ -1029,6 +1029,8 @@ type ExportRelabelConfig struct {
 	Action relabel.Action `json:"action"`
 
 	Separator string `json:"separator"`
+
+	RegexpStr string `json:"regexp_str"`
 }
 
 
@@ -1061,11 +1063,17 @@ func (es *ExportScrape) refactorConfig() (*config.ScrapeConfig, map[string][]*ta
 	}
 	// rebuild relabel.config
 	if len(es.RelabelConfigs) > 0 {
-		relabelConfigs := buildRelabelConfigs(es.RelabelConfigs)
+		relabelConfigs,err := buildRelabelConfigs(es.RelabelConfigs)
+		if err != nil {
+			return  nil, nil, errors.Errorf("build relabel config err:",err.Error())
+		}
 		sc.RelabelConfigs = relabelConfigs
 	}
 	if len(es.MetricRelabelConfigs) > 0 {
-		metricConfigs := buildRelabelConfigs(es.MetricRelabelConfigs)
+		metricConfigs,err := buildRelabelConfigs(es.MetricRelabelConfigs)
+		if err != nil {
+			return  nil, nil, errors.Errorf("build relabel config err:",err.Error())
+		}
 		sc.MetricRelabelConfigs = metricConfigs
 	}
 	// build scrape target group
@@ -1093,7 +1101,7 @@ func buildTargetGroup(jobName string, targets []string) map[string][]*targetgrou
 	return mt
 }
 
-func buildRelabelConfigs(er []*ExportRelabelConfig) []*relabel.Config {
+func buildRelabelConfigs(er []*ExportRelabelConfig) ([]*relabel.Config, error) {
 	configList := make([]*relabel.Config, 0, len(er))
 	for _, val := range er {
 		defaultRc := relabel.DefaultRelabelConfig
@@ -1114,10 +1122,17 @@ func buildRelabelConfigs(er []*ExportRelabelConfig) []*relabel.Config {
 		if val.Replacement != "" {
 			defaultRc.Replacement = val.Replacement
 		}
+		if val.RegexpStr != "" {
+			regex,err := relabel.NewRegexp(val.RegexpStr)
+			if err != nil {
+				return nil, err
+			}
+			defaultRc.Regex = regex
+		}
 
 		configList = append(configList, &defaultRc)
 	}
-	return configList
+	return configList, nil
 }
 
 // Add scrape job
