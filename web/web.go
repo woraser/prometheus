@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
 	"github.com/prometheus/prometheus/pkg/relabel"
+	"github.com/prometheus/prometheus/pkg/rulefmt"
 	"io"
 	"io/ioutil"
 	stdlog "log"
@@ -327,9 +328,12 @@ func New(logger log.Logger, o *Options) *Handler {
 	router.Get("/service-discovery", readyf(h.serviceDiscovery))
 
 	// User Custom
+	// scrape
 	router.Post("/scrape_job", readyf(h.scrapeJob))
 	router.Get("/scrape_list", readyf(h.listScrapeNames))
 	router.Del("/scrape_job/*job_name", readyf(h.delScrapeName))
+	// rules
+	router.Post("/rule", readyf(h.extraRule))
 
 	router.Get("/metrics", promhttp.Handler().ServeHTTP)
 
@@ -1188,6 +1192,105 @@ func (h *Handler) delScrapeName(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("failed del job: %s", err), http.StatusInternalServerError)
 		return
 	}
+}
+
+type ExtraRuleGroup struct {
+	Name     string         `json:"name"`
+	Interval string         `json:"interval"`
+	Rules    []ExtraRule    `json:"rules"`
+}
+
+type ExtraRule struct {
+	Record      string            `json:"record"`
+	Alert       string            `json:"alert"`
+	Expr        string            `json:"expr"`
+	For         string            `json:"for"`
+	Labels      map[string]string `json:"labels"`
+	Annotations map[string]string `json:"annotations"`
+}
+
+func (erg *ExtraRuleGroup) refactorConfig() (*rulefmt.RuleGroup, error) {
+	group := &rulefmt.RuleGroup{
+		Name: erg.Name,
+		Interval: model.Duration(5 * time.Second),
+		Rules: make([]rulefmt.Rule, 0, len(erg.Rules)),
+	}
+	if erg.Interval != "" {
+		sInterval ,err := model.ParseDuration(erg.Interval)
+		if err != nil {
+			return  nil, errors.Errorf("ScrapeInterval format error:",err.Error())
+		}
+		group.Interval = sInterval
+	}
+	for _, r := range erg.Rules {
+		er, err := r.formatRule()
+		if err != nil {
+			return  nil, errors.Errorf("Group rule format error:",err.Error())
+		}
+		group.Rules = append(group.Rules, *er)
+	}
+
+
+	return group, nil
+}
+
+func (er *ExtraRule) formatRule() (*rulefmt.Rule, error) {
+	r := &rulefmt.Rule{
+		Record: er.Record,
+		Alert: er.Alert,
+		Expr: er.Expr,
+		Labels: er.Labels,
+		Annotations: er.Annotations,
+	}
+	if er.For != "" {
+		sInterval ,err := model.ParseDuration(er.For)
+		if err != nil {
+			return  nil, errors.Errorf("ExtraRule for format error:",err.Error())
+		}
+		r.For = sInterval
+	}
+
+	return r, nil
+}
+
+
+func (h *Handler) extraRule(w http.ResponseWriter, r *http.Request) {
+	decoder,_ := ioutil.ReadAll(r.Body)
+	var erg ExtraRuleGroup
+	err := json.Unmarshal(decoder,&erg)
+	if err != nil {
+		level.Error(h.logger).Log("error", "Error decoding JSON", "error msg:", err)
+		http.Error(w, fmt.Sprintf("Error decoding JSON: %s", err), http.StatusInternalServerError)
+		return
+	}
+	// convert body to config
+	group, err := erg.refactorConfig()
+	if err != nil {
+		level.Error(h.logger).Log("error", "Refactor to Config error", "error msg:", err)
+		http.Error(w, fmt.Sprintf("Refactor to Config error: %s", err), http.StatusInternalServerError)
+		return
+	}
+	fn := "extra_" + group.Name
+	groupKey := h.ruleManager.GroupKey(group.Name,fn)
+	groupMap := h.ruleManager.GroupsList()
+	v , ok := groupMap[groupKey]
+	if ok {
+		v.Stop()
+
+
+	}
+
+	defaultInterval := time.Duration(5 * time.Second)
+	// add job to scrapeManager
+	addErr :=h.ruleManager.AddExtraRule(defaultInterval, nil, group)
+	if addErr != nil {
+		level.Error(h.logger).Log("error", "FailedAddExtraRule", "error msg:", addErr)
+		http.Error(w, fmt.Sprintf("FailedAddExtraRule:%s", addErr), http.StatusInternalServerError)
+	}
+}
+
+func verifyGroup() {
+
 }
 
 // AlertStatus bundles alerting rules and the mapping of alert states to row classes.

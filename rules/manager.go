@@ -243,6 +243,8 @@ type Group struct {
 	evaluationTimestamp  time.Time
 
 	shouldRestore bool
+
+	extraAdditional bool
 	// 信号量
 	done       chan struct{}
 	terminated chan struct{}
@@ -372,6 +374,13 @@ func (g *Group) stop() {
 	close(g.done)
 	<-g.terminated
 }
+
+
+func (g *Group) Stop() {
+	g.stop()
+}
+
+
 
 func (g *Group) hash() uint64 {
 	l := labels.New(
@@ -977,10 +986,78 @@ func (m *Manager) LoadGroups(
 	return groups, nil
 }
 
+
+// Add rule by api
+func (m *Manager) BuildGroup(
+	interval time.Duration, externalLabels labels.Labels, rg *rulefmt.RuleGroup) (*Group, error) {
+	shouldRestore := !m.restored
+	fn := "extra_" + rg.Name
+
+	itv := interval
+	if rg.Interval != 0 {
+		itv = time.Duration(rg.Interval)
+	}
+
+	rules := make([]Rule, 0, len(rg.Rules))
+	for _, r := range rg.Rules {
+		expr, err := promql.ParseExpr(r.Expr)
+		if err != nil {
+			return nil, errors.Wrap(err, fn)
+		}
+
+		if r.Alert != "" {
+			rules = append(rules, NewAlertingRule(
+				r.Alert,
+				expr,
+				time.Duration(r.For),
+				labels.FromMap(r.Labels),
+				labels.FromMap(r.Annotations),
+				externalLabels,
+				m.restored,
+				log.With(m.logger, "alert", r.Alert),
+			))
+			continue
+		}
+		rules = append(rules, NewRecordingRule(
+			r.Record,
+			expr,
+			labels.FromMap(r.Labels),
+		))
+	}
+	nGroup := NewGroup(rg.Name, fn, itv, rules, shouldRestore, m.opts)
+	// declare is added by api
+	nGroup.extraAdditional = true
+	return nGroup, nil
+}
+
+// Add rule by api
+func (m *Manager) AddExtraRule(
+	interval time.Duration, externalLabels labels.Labels, rg *rulefmt.RuleGroup) error {
+	fn := "extra_" + rg.Name
+	nGroup, err:= m.BuildGroup(interval, externalLabels, rg)
+	if err != nil {
+		return err
+	}
+
+	nGroup.RunNow(m.opts.Context)
+	m.groups[groupKey(rg.Name, fn)] = nGroup
+ 	return nil
+}
+
+func (g *Group) RunNow(c context.Context) {
+	go func(newg *Group, nc context.Context) {
+		newg.run(nc)
+	}(g, c)
+}
+
 // Group names need not be unique across filenames.
 // 获取group的uid
 func groupKey(name, file string) string {
 	return name + ";" + file
+}
+
+func (m Manager) GroupKey(name, file string) string {
+	return groupKey(name, file)
 }
 
 // RuleGroups returns the list of manager's rule groups.
@@ -1002,6 +1079,10 @@ func (m *Manager) RuleGroups() []*Group {
 	})
 
 	return rgs
+}
+
+func (m *Manager) GroupsList() map[string]*Group {
+	return m.groups
 }
 
 // Rules returns the list of the manager's rules.
