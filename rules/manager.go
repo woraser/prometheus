@@ -24,7 +24,7 @@ import (
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
-	opentracing "github.com/opentracing/opentracing-go"
+	"github.com/opentracing/opentracing-go"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
@@ -377,7 +377,8 @@ func (g *Group) stop() {
 
 
 func (g *Group) Stop() {
-	g.stop()
+	close(g.done)
+	<-g.terminated
 }
 
 
@@ -986,7 +987,6 @@ func (m *Manager) LoadGroups(
 	return groups, nil
 }
 
-
 // Add rule by api
 func (m *Manager) BuildGroup(
 	interval time.Duration, externalLabels labels.Labels, rg *rulefmt.RuleGroup) (*Group, error) {
@@ -1035,66 +1035,47 @@ func (m *Manager) GetOptsContext() context.Context{
 }
 
 // Add rule by api
-func (m *Manager) AddExtraRule(
+func (m *Manager) UpdateExtraRule(
 	interval time.Duration, externalLabels labels.Labels, rg *rulefmt.RuleGroup) error {
 	fn := "extra_" + rg.Name
+	gn := groupKey(rg.Name, fn)
 	nGroup, err:= m.BuildGroup(interval, externalLabels, rg)
 	if err != nil {
 		return err
 	}
+	oldg, ok := m.groups[gn]
+	delete(m.groups, gn)
+	if ok {
+		m.groups[gn] = nGroup
+		go func(newg *Group, nc context.Context) {
+			if ok {
+				oldg.stop()
+				newg.CopyState(oldg)
+			}
+			go func() {
+				// 运行 group主函数 周期性执行rule运算
+				newg.run(nc)
+			}()
+		}(nGroup, m.opts.Context)
+		return nil
+	}
 
-	nGroup.RunNow(m.opts.Context)
-	m.groups[groupKey(rg.Name, fn)] = nGroup
- 	return nil
+	nGroup.Run(m.opts.Context)
+	m.groups[gn] = nGroup
+
+	return nil
 }
 
-func (g *Group) RunNow(c context.Context) {
+func (g *Group) Run(c context.Context) {
 	go func(newg *Group, nc context.Context) {
 		newg.run(nc)
 	}(g, c)
-}
-
-func (m *Manager) AddRules(rs []*rulefmt.Rule, externalLabels labels.Labels, groupKey string) error {
-	group,ok := m.groups[groupKey]
-	if !ok {
-		return errors.Errorf("cannot find group with key:%s",groupKey)
-	}
-	for _, r := range rs {
-		expr, err := promql.ParseExpr(r.Expr)
-		if err != nil {
-			return err
-		}
-
-		if r.Alert != "" {
-			group.rules = append(group.rules, NewAlertingRule(
-				r.Alert,
-				expr,
-				time.Duration(r.For),
-				labels.FromMap(r.Labels),
-				labels.FromMap(r.Annotations),
-				externalLabels,
-				m.restored,
-				log.With(m.logger, "alert", r.Alert),
-			))
-			continue
-		}
-		group.rules = append(group.rules, NewRecordingRule(
-			r.Record,
-			expr,
-			labels.FromMap(r.Labels),
-		))
-	}
-	return nil
 }
 
 // Group names need not be unique across filenames.
 // 获取group的uid
 func groupKey(name, file string) string {
 	return name + ";" + file
-}
-
-func (m Manager) GroupKey(name, file string) string {
-	return groupKey(name, file)
 }
 
 // RuleGroups returns the list of manager's rule groups.
