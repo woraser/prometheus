@@ -1270,19 +1270,36 @@ func (h *Handler) extraRule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Refactor to Config error: %s", err), http.StatusInternalServerError)
 		return
 	}
+	defaultInterval := time.Duration(5 * time.Second)
 	fn := "extra_" + group.Name
 	groupKey := h.ruleManager.GroupKey(group.Name,fn)
 	groupMap := h.ruleManager.GroupsList()
-	v , ok := groupMap[groupKey]
+	vg , ok := groupMap[groupKey]
 	if ok {
-		v.Stop()
+		vg.Stop()
 
+		for _, r := range erg.Rules {
+			er, err := r.formatRule()
+			if err != nil {
+				level.Error(h.logger).Log("error", "Group rule format error", "error msg:", err)
+				http.Error(w, fmt.Sprintf("Group rule format error: %s", err), http.StatusInternalServerError)
+				return
+			}
+			group.Rules = append(group.Rules, *er)
+		}
 
+		err :=h.ruleManager.AddExtraRule(defaultInterval, h.config.GlobalConfig.ExternalLabels, nil)
+		if err != nil {
+			level.Error(h.logger).Log("error", "FailedAddExtraRule", "error msg:", err)
+			http.Error(w, fmt.Sprintf("FailedAddExtraRule:%s", err), http.StatusInternalServerError)
+			return
+		}
+		vg.RunNow(h.ruleManager.GetOptsContext())
+		return
 	}
 
-	defaultInterval := time.Duration(5 * time.Second)
 	// add job to scrapeManager
-	addErr :=h.ruleManager.AddExtraRule(defaultInterval, nil, group)
+	addErr :=h.ruleManager.AddExtraRule(defaultInterval, h.config.GlobalConfig.ExternalLabels, group)
 	if addErr != nil {
 		level.Error(h.logger).Log("error", "FailedAddExtraRule", "error msg:", addErr)
 		http.Error(w, fmt.Sprintf("FailedAddExtraRule:%s", addErr), http.StatusInternalServerError)

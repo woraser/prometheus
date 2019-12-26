@@ -1030,6 +1030,10 @@ func (m *Manager) BuildGroup(
 	return nGroup, nil
 }
 
+func (m *Manager) GetOptsContext() context.Context{
+	return m.opts.Context
+}
+
 // Add rule by api
 func (m *Manager) AddExtraRule(
 	interval time.Duration, externalLabels labels.Labels, rg *rulefmt.RuleGroup) error {
@@ -1048,6 +1052,39 @@ func (g *Group) RunNow(c context.Context) {
 	go func(newg *Group, nc context.Context) {
 		newg.run(nc)
 	}(g, c)
+}
+
+func (m *Manager) AddRules(rs []*rulefmt.Rule, externalLabels labels.Labels, groupKey string) error {
+	group,ok := m.groups[groupKey]
+	if !ok {
+		return errors.Errorf("cannot find group with key:%s",groupKey)
+	}
+	for _, r := range rs {
+		expr, err := promql.ParseExpr(r.Expr)
+		if err != nil {
+			return err
+		}
+
+		if r.Alert != "" {
+			group.rules = append(group.rules, NewAlertingRule(
+				r.Alert,
+				expr,
+				time.Duration(r.For),
+				labels.FromMap(r.Labels),
+				labels.FromMap(r.Annotations),
+				externalLabels,
+				m.restored,
+				log.With(m.logger, "alert", r.Alert),
+			))
+			continue
+		}
+		group.rules = append(group.rules, NewRecordingRule(
+			r.Record,
+			expr,
+			labels.FromMap(r.Labels),
+		))
+	}
+	return nil
 }
 
 // Group names need not be unique across filenames.
