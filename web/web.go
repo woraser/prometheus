@@ -18,8 +18,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
+	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/pkg/relabel"
 	"github.com/prometheus/prometheus/pkg/rulefmt"
+	"github.com/prometheus/prometheus/pkg/timestamp"
 	"io"
 	"io/ioutil"
 	stdlog "log"
@@ -70,6 +72,7 @@ import (
 	api_v2 "github.com/prometheus/prometheus/web/api/v2"
 	"github.com/prometheus/prometheus/web/ui"
 )
+
 // 本地host地址
 var localhostRepresentations = []string{"127.0.0.1", "localhost"}
 
@@ -133,6 +136,7 @@ func newMetrics(r prometheus.Registerer) *metrics {
 	}
 	return m
 }
+
 // 前缀处理
 func (m *metrics) instrumentHandlerWithPrefix(prefix string) func(handlerName string, handler http.HandlerFunc) http.HandlerFunc {
 	return func(handlerName string, handler http.HandlerFunc) http.HandlerFunc {
@@ -328,6 +332,8 @@ func New(logger log.Logger, o *Options) *Handler {
 	router.Get("/service-discovery", readyf(h.serviceDiscovery))
 
 	// User Custom
+	// metric
+	router.Post("/insert_metric", readyf(h.insertMetric))
 	// scrape
 	router.Post("/scrape_job", readyf(h.scrapeJob))
 	router.Get("/scrape_list", readyf(h.listScrapeNames))
@@ -486,7 +492,7 @@ func (h *Handler) Run(ctx context.Context) error {
 		m = cmux.New(listener)
 		// See https://github.com/grpc/grpc-go/issues/2636 for why we need to use MatchWithWriters().
 		//grpc listener
-		grpcl   = m.MatchWithWriters(cmux.HTTP2MatchHeaderFieldSendSettings("content-type", "application/grpc"))
+		grpcl = m.MatchWithWriters(cmux.HTTP2MatchHeaderFieldSendSettings("content-type", "application/grpc"))
 		//http listener
 		httpl   = m.Match(cmux.HTTP1Fast())
 		grpcSrv = grpc.NewServer()
@@ -559,6 +565,7 @@ func (h *Handler) Run(ctx context.Context) error {
 		return nil
 	}
 }
+
 // 告警页面
 func (h *Handler) alerts(w http.ResponseWriter, r *http.Request) {
 
@@ -990,6 +997,17 @@ func (h *Handler) executeTemplate(w http.ResponseWriter, name string, data inter
 	io.WriteString(w, result)
 }
 
+type CustomMetric struct {
+	MetricName string         `json:"metric_name"`
+	Labels     []*CustomLabel `json:"labels"`
+	Val        float64        `json:"val"`
+}
+
+type CustomLabel struct {
+	LabelName  string `json:"label_name"`
+	LabelValue string `json:"label_value"`
+}
+
 // Export fields for Scrape.
 // See detail:config.scrapeConfig
 type ExportScrape struct {
@@ -1010,7 +1028,7 @@ type ExportScrape struct {
 	Scheme string `json:"scheme"`
 
 	SampleLimit uint `json:"sample_limit"`
-	
+
 	Targets []string `json:"targets"`
 
 	// List of target extra relabel configurations. except Regex
@@ -1037,46 +1055,45 @@ type ExportRelabelConfig struct {
 	RegexpStr string `json:"regexp_str"`
 }
 
-
 func (es *ExportScrape) refactorConfig() (*config.ScrapeConfig, map[string][]*targetgroup.Group, error) {
 	sc := &config.ScrapeConfig{
-		JobName: es.JobName,
-		MetricsPath: es.MetricsPath,
-		Params: es.Params,
-		Scheme: es.Scheme,
-		HonorTimestamps: es.HonorTimestamps,
-		ScrapeInterval: model.Duration(5 * time.Second),
-		ScrapeTimeout: model.Duration(5 * time.Second),
+		JobName:              es.JobName,
+		MetricsPath:          es.MetricsPath,
+		Params:               es.Params,
+		Scheme:               es.Scheme,
+		HonorTimestamps:      es.HonorTimestamps,
+		ScrapeInterval:       model.Duration(5 * time.Second),
+		ScrapeTimeout:        model.Duration(5 * time.Second),
 		MetricRelabelConfigs: nil,
-		RelabelConfigs: nil,
+		RelabelConfigs:       nil,
 	}
 	if es.ScrapeInterval != "" {
-		sInterval ,err := model.ParseDuration(es.ScrapeInterval)
+		sInterval, err := model.ParseDuration(es.ScrapeInterval)
 		if err != nil {
-			return  nil, nil, errors.Errorf("ScrapeInterval format error:",err.Error())
+			return nil, nil, errors.Errorf("ScrapeInterval format error:", err.Error())
 		}
 		sc.ScrapeInterval = sInterval
 	}
 
 	if es.ScrapeTimeout != "" {
-		sTimeout ,err := model.ParseDuration(es.ScrapeInterval)
+		sTimeout, err := model.ParseDuration(es.ScrapeInterval)
 		if err != nil {
-			return  nil, nil, errors.Errorf("ScrapeTimeout format error:",err.Error())
+			return nil, nil, errors.Errorf("ScrapeTimeout format error:", err.Error())
 		}
 		sc.ScrapeTimeout = sTimeout
 	}
 	// rebuild relabel.config
 	if len(es.RelabelConfigs) > 0 {
-		relabelConfigs,err := buildRelabelConfigs(es.RelabelConfigs)
+		relabelConfigs, err := buildRelabelConfigs(es.RelabelConfigs)
 		if err != nil {
-			return  nil, nil, errors.Errorf("build relabel config err:",err.Error())
+			return nil, nil, errors.Errorf("build relabel config err:", err.Error())
 		}
 		sc.RelabelConfigs = relabelConfigs
 	}
 	if len(es.MetricRelabelConfigs) > 0 {
-		metricConfigs,err := buildRelabelConfigs(es.MetricRelabelConfigs)
+		metricConfigs, err := buildRelabelConfigs(es.MetricRelabelConfigs)
 		if err != nil {
-			return  nil, nil, errors.Errorf("build relabel config err:",err.Error())
+			return nil, nil, errors.Errorf("build relabel config err:", err.Error())
 		}
 		sc.MetricRelabelConfigs = metricConfigs
 	}
@@ -1090,7 +1107,7 @@ func buildTargetGroup(jobName string, targets []string) map[string][]*targetgrou
 	groups := make([]*targetgroup.Group, 0, 5)
 	tgs := make([]model.LabelSet, 0, len(targets))
 
-	for _,val := range targets {
+	for _, val := range targets {
 		trs := model.LabelSet{
 			"__address__": model.LabelValue(val),
 		}
@@ -1098,8 +1115,8 @@ func buildTargetGroup(jobName string, targets []string) map[string][]*targetgrou
 	}
 	g := &targetgroup.Group{
 		Targets: tgs,
-		Labels: nil,
-		Source: "0",
+		Labels:  nil,
+		Source:  "0",
 	}
 	mt[jobName] = append(groups, g)
 	return mt
@@ -1127,7 +1144,7 @@ func buildRelabelConfigs(er []*ExportRelabelConfig) ([]*relabel.Config, error) {
 			defaultRc.Replacement = val.Replacement
 		}
 		if val.RegexpStr != "" {
-			regex,err := relabel.NewRegexp(val.RegexpStr)
+			regex, err := relabel.NewRegexp(val.RegexpStr)
 			if err != nil {
 				return nil, err
 			}
@@ -1143,9 +1160,9 @@ func buildRelabelConfigs(er []*ExportRelabelConfig) ([]*relabel.Config, error) {
 // Return scrapePool name list
 func (h *Handler) scrapeJob(w http.ResponseWriter, r *http.Request) {
 
-	decoder,_ := ioutil.ReadAll(r.Body)
+	decoder, _ := ioutil.ReadAll(r.Body)
 	var t ExportScrape
-	err := json.Unmarshal(decoder,&t)
+	err := json.Unmarshal(decoder, &t)
 	if err != nil {
 		level.Error(h.logger).Log("error", "Error decoding JSON", "error msg:", err)
 		http.Error(w, fmt.Sprintf("Error decoding JSON: %s", err), http.StatusInternalServerError)
@@ -1159,7 +1176,7 @@ func (h *Handler) scrapeJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// add job to scrapeManager
-	h.scrapeManager.AddExtraScrape(scrapeCf,scrapeTs)
+	h.scrapeManager.AddExtraScrape(scrapeCf, scrapeTs)
 	// return response
 	dec := json.NewEncoder(w)
 	if err := dec.Encode(h.scrapeManager.GetScrapePoolNames()); err != nil {
@@ -1194,10 +1211,49 @@ func (h *Handler) delScrapeName(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Add custom data
+// Return error if panic
+func (h *Handler) insertMetric(w http.ResponseWriter, r *http.Request) {
+
+	decoder, _ := ioutil.ReadAll(r.Body)
+	var t CustomMetric
+	err := json.Unmarshal(decoder, &t)
+	if err != nil {
+		level.Error(h.logger).Log("error", "Error decoding CustomMetric JSON", "error msg:", err)
+		http.Error(w, fmt.Sprintf("Error decoding CustomMetric JSON: %s", err), http.StatusInternalServerError)
+		return
+	}
+	nowInt := timestamp.FromTime(time.Now())
+	// convert body to config
+	labels := t.buildInsertLabel()
+	app, _ := h.storage.Appender()
+	_, errs := app.Add(labels, nowInt, t.Val)
+	if errs != nil {
+		level.Error(h.logger).Log("error", "appender add error:", "error msg:", errs)
+		http.Error(w, fmt.Sprintf("appender add error:: %s", errs), http.StatusInternalServerError)
+	}
+	if err := app.Commit(); err != nil {
+		level.Error(h.logger).Log("error", "appender Commit error:", "error msg:", errs)
+		http.Error(w, fmt.Sprintf("appender Commit error:: %s", errs), http.StatusInternalServerError)
+	}
+}
+
+func (c CustomMetric) buildInsertLabel() labels.Labels {
+	//labels := c.Labels
+	labelMap := make(map[string]string)
+	labelMap[model.MetricNameLabel] = c.MetricName
+
+	for _, l := range c.Labels {
+		labelMap[l.LabelName] = l.LabelValue
+	}
+	ll := labels.FromMap(labelMap)
+	return ll
+}
+
 type ExtraRuleGroup struct {
-	Name     string         `json:"name"`
-	Interval string         `json:"interval"`
-	Rules    []ExtraRule    `json:"rules"`
+	Name     string      `json:"name"`
+	Interval string      `json:"interval"`
+	Rules    []ExtraRule `json:"rules"`
 }
 
 type ExtraRule struct {
@@ -1211,41 +1267,40 @@ type ExtraRule struct {
 
 func (erg *ExtraRuleGroup) refactorConfig() (*rulefmt.RuleGroup, error) {
 	group := &rulefmt.RuleGroup{
-		Name: erg.Name,
+		Name:     erg.Name,
 		Interval: model.Duration(5 * time.Second),
-		Rules: make([]rulefmt.Rule, 0, len(erg.Rules)),
+		Rules:    make([]rulefmt.Rule, 0, len(erg.Rules)),
 	}
 	if erg.Interval != "" {
-		sInterval ,err := model.ParseDuration(erg.Interval)
+		sInterval, err := model.ParseDuration(erg.Interval)
 		if err != nil {
-			return  nil, errors.Errorf("ScrapeInterval format error:",err.Error())
+			return nil, errors.Errorf("ScrapeInterval format error:", err.Error())
 		}
 		group.Interval = sInterval
 	}
 	for _, r := range erg.Rules {
 		er, err := r.formatRule()
 		if err != nil {
-			return  nil, errors.Errorf("Group rule format error:",err.Error())
+			return nil, errors.Errorf("Group rule format error:", err.Error())
 		}
 		group.Rules = append(group.Rules, *er)
 	}
-
 
 	return group, nil
 }
 
 func (er *ExtraRule) formatRule() (*rulefmt.Rule, error) {
 	r := &rulefmt.Rule{
-		Record: er.Record,
-		Alert: er.Alert,
-		Expr: er.Expr,
-		Labels: er.Labels,
+		Record:      er.Record,
+		Alert:       er.Alert,
+		Expr:        er.Expr,
+		Labels:      er.Labels,
 		Annotations: er.Annotations,
 	}
 	if er.For != "" {
-		sInterval ,err := model.ParseDuration(er.For)
+		sInterval, err := model.ParseDuration(er.For)
 		if err != nil {
-			return  nil, errors.Errorf("ExtraRule for format error:",err.Error())
+			return nil, errors.Errorf("ExtraRule for format error:", err.Error())
 		}
 		r.For = sInterval
 	}
@@ -1253,11 +1308,10 @@ func (er *ExtraRule) formatRule() (*rulefmt.Rule, error) {
 	return r, nil
 }
 
-
 func (h *Handler) extraRule(w http.ResponseWriter, r *http.Request) {
-	decoder,_ := ioutil.ReadAll(r.Body)
+	decoder, _ := ioutil.ReadAll(r.Body)
 	var erg ExtraRuleGroup
-	err := json.Unmarshal(decoder,&erg)
+	err := json.Unmarshal(decoder, &erg)
 	if err != nil {
 		level.Error(h.logger).Log("error", "Error decoding JSON", "error msg:", err)
 		http.Error(w, fmt.Sprintf("Error decoding JSON: %s", err), http.StatusInternalServerError)
@@ -1273,7 +1327,7 @@ func (h *Handler) extraRule(w http.ResponseWriter, r *http.Request) {
 	defaultInterval := time.Duration(5 * time.Second)
 
 	// add job to scrapeManager
-	addErr :=h.ruleManager.UpdateExtraRule(defaultInterval, h.config.GlobalConfig.ExternalLabels, group)
+	addErr := h.ruleManager.UpdateExtraRule(defaultInterval, h.config.GlobalConfig.ExternalLabels, group)
 	if addErr != nil {
 		level.Error(h.logger).Log("error", "FailedAddExtraRule", "error msg:", addErr)
 		http.Error(w, fmt.Sprintf("FailedAddExtraRule:%s", addErr), http.StatusInternalServerError)
@@ -1285,4 +1339,3 @@ type AlertStatus struct {
 	Groups               []*rules.Group
 	AlertStateToRowClass map[rules.AlertState]string
 }
-

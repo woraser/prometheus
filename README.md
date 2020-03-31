@@ -137,3 +137,33 @@
     
     ```
     
+### 3. Insert custom metric
+
+
+* Add new rule group: `POST /insert_metric`
+
+    Post Data:
+    ```
+    {
+    	"metric_name": "test_metric_name",
+    	"val": 1, //float64
+    	"labels": [
+    		{
+    			"label_name": "job",
+    			"label_value": "test_job"
+    		},
+    		{
+    	   		"label_name": "instance",
+            	"label_value": "127.0.0.1"
+    		}
+    	]
+    }
+    
+    Failed: error msg
+    ```
+    Response:
+    ```
+      Success:  
+      Failed: error msg
+    
+    ```    
