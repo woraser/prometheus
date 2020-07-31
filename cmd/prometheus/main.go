@@ -381,11 +381,12 @@ func main() {
 		}
 		//promql 查询引擎
 		queryEngine = promql.NewEngine(opts)
-		// 新建规则管理器
+		// 新建规则管理器 报错record and alert rule
 		ruleManager = rules.NewManager(&rules.ManagerOptions{
 			Appendable:      fanoutStorage,
 			TSDB:            localStorage,
 			QueryFunc:       rules.EngineQueryFunc(queryEngine, fanoutStorage),
+			// send alert notify when firing or resolved
 			NotifyFunc:      sendAlerts(notifierManager, cfg.web.ExternalURL.String()),
 			Context:         ctxRule,
 			ExternalURL:     cfg.web.ExternalURL,
@@ -474,7 +475,8 @@ func main() {
 				}
 				files = append(files, fs...)
 			}
-			// 为ruleManager应用rule files
+			// 为ruleManager应用rule
+			// 同时准备启动run 服务
 			return ruleManager.Update(
 				time.Duration(cfg.GlobalConfig.EvaluationInterval),
 				files,
@@ -663,7 +665,7 @@ func main() {
 		g.Add(
 			func() error {
 				<-reloadReady.C
-				// 解除block阻塞以启动规则模块
+				// 解除ruleManager内所有group的block阻塞以启动规则模块
 				ruleManager.Run()
 				<-cancel
 				return nil
