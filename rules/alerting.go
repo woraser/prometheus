@@ -125,7 +125,6 @@ type AlertingRule struct {
 	externalLabels map[string]string
 	// true if old state has been restored. We start persisting samples for ALERT_FOR_STATE
 	// only after the restoration.
-	// 如果已恢复旧状态，则为true。 仅在恢复后，我们才开始保留ALERT_FOR_STATE的样本。
 	restored bool
 	// Protects the below.
 	mtx sync.Mutex
@@ -317,14 +316,12 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 	// Create pending alerts for any new vector elements in the alert expression
 	// or update the expression value for existing elements.
 	// 创建新告警或者更新告警
-	// 创建告警集合
 	resultFPs := map[uint64]struct{}{}
 
 	var vec promql.Vector
 	for _, smpl := range res {
 		// Provide the alert information to the template.
 		// l = {'name':'value'}
-		// the list of labels
 		l := make(map[string]string, len(smpl.Metric))
 		for _, lbl := range smpl.Metric {
 			l[lbl.Name] = lbl.Value
@@ -377,7 +374,7 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 
 		// Check whether we already have alerting state for the identifying label set.
 		// Update the last value and annotations if so, create a new alert entry otherwise.
-		// 判断告警是否存在，若存在则更新value，否则新建
+		// 判断告警是否存在，若存在则更新，否则新建
 		if alert, ok := r.active[h]; ok && alert.State != StateInactive {
 			alert.Value = smpl.V
 			alert.Annotations = annotations
@@ -394,29 +391,25 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 	}
 
 	// Check if any pending alerts should be removed or fire now. Write out alert timeseries.
-	// 校验alertRule下已存在的活动告警
 	for fp, a := range r.active {
-		// 若活动的告警记录不在这次告警集合中
 		if _, ok := resultFPs[fp]; !ok {
 			// If the alert was previously firing, keep it around for a given
 			// retention time so it is reported as resolved to the AlertManager.
-			// 删除：pending中的，告警已解决且解决时间>数据保留时间
 			if a.State == StatePending || (!a.ResolvedAt.IsZero() && ts.Sub(a.ResolvedAt) > resolvedRetention) {
 				delete(r.active, fp)
 			}
-			// 将告警记录设置为失效状态
 			if a.State != StateInactive {
 				a.State = StateInactive
 				a.ResolvedAt = ts
 			}
 			continue
 		}
-        // 修改pending记录，设置告警时间为当前时间
+
 		if a.State == StatePending && ts.Sub(a.ActiveAt) >= r.holdDuration {
 			a.State = StateFiring
 			a.FiredAt = ts
 		}
-		// 保留数据
+
 		if r.restored {
 			vec = append(vec, r.sample(a, ts))
 			vec = append(vec, r.forStateSample(a, ts, float64(a.ActiveAt.Unix())))
@@ -487,7 +480,6 @@ func (r *AlertingRule) ForEachActiveAlert(f func(*Alert)) {
 func (r *AlertingRule) sendAlerts(ctx context.Context, ts time.Time, resendDelay time.Duration, interval time.Duration, notifyFunc NotifyFunc) {
 	alerts := []*Alert{}
 	r.ForEachActiveAlert(func(alert *Alert) {
-		// 判断rule中的活动告警是否需要发送
 		if alert.needsSending(ts, resendDelay) {
 			alert.LastSentAt = ts
 			// Allow for a couple Eval or Alertmanager send failures
