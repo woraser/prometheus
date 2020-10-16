@@ -20,5 +20,7 @@ benchmark.txt
 .idea/*
 .idea/vcs.xml
 
-
+/vendor
 vendor/*
+
+/*.icloud
